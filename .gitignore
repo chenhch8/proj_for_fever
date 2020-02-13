@@ -1,0 +1,13 @@
+data/*
+backup/*
+results-backup/*
+*.ipynb
+*.sh
+*/results*
+*.json
+__pycache__
+code/model2.py
+log.txt
+*.sh
+results*
+strategy*
