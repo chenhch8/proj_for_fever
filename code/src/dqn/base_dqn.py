@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+# coding=utf-8
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import random
+import math
+import os
+
+from typing import List
+from ..data_structure import Transition, Action, State
+
+class BaseDQN:
+    def __init__(self, args) -> None:
+        self.q_net = None
+        self.t_net = None
+        self.optimizer = None
+        self.scheduler = None
+        
+        # discount factor
+        self.eps_gamma = args.eps_gamma
+        # epsilon greedy
+        self.eps_start = args.eps_start
+        self.eps_end = args.eps_end
+        self.eps_decay = args.eps_decay
+        # dqn type
+        self.dqn_type = args.dqn_type
+
+        self.target_update = args.target_update
+        self.step_done = 0
+        self.max_seq_length = args.max_seq_length
+
+        self.device = args.device
+        self.logger = args.logger
+        self.args = args
+
+
+    def set_network_untrainable(self, model) -> None:
+        model.eval()
+        for param in model.parameters():
+            param.requeires_grad = False
+
+
+    def to(self, device):
+        self.q_net.to(device)
+        self.t_net.to(device)
+        # multi-gpu training (should be after apex fp16 initialization)
+        if self.args.n_gpu > 1:
+            self.q_net = torch.nn.DataParallel(self.q_net)
+            self.t_net = torch.nn.DataParallel(self.t_net)
+        # Distributed training (should be after apex fp16 initialization)
+        if self.args.local_rank != -1:
+            self.q_net = torch.nn.parallel.DistributedDataParallel(
+                self.q_net, device_ids=[self.args.local_rank], output_device=self.args.local_rank, find_unused_parameters=True,
+            )
+            self.t_net = torch.nn.parallel.DistributedDataParallel(
+                self.t_net, device_ids=[self.args.local_rank], output_device=self.args.local_rank, find_unused_parameters=True,
+            )
+
+
+    def update(self, transitions: List[Transition]) -> float:
+        self.q_net.train()
+        self.t_net.eval()
+        batch = Transition(*zip(*transitions))
+        
+        # state_action value of q_net
+        labels = torch.tensor([action.label for action in batch.action],
+                               dtype=torch.long, device=self.device).view(-1, 1)
+        state_action_values = self.q_net(
+            **self.convert_to_inputs_for_update(batch.state, batch.action)
+        ).gather(dim=1, index=labels).view(-1)
+        
+        # rceward
+        rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
+        
+        # max state value of t_net
+        next_states = list(filter(lambda s: s is not None, batch.next_state))
+        ## max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
+        max_actions, max_q_values = \
+            tuple(zip(*[self.select_action(next_state, next_actions, strategy='greedy') \
+                         for next_state, next_actions in zip(batch.next_state, batch.next_actions) \
+                            if next_state is not None]))
+        assert len(max_actions) == len(next_states)
+
+        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
+                                      dtype=torch.bool, device=self.device)
+        next_state_values = state_action_value.new_zeros(state_action_value.size())
+        if self.args.dqn_type == 'dqn':
+            next_state_values[non_final_mask] = \
+                torch.tensor(max_q_values, dtype=torch.float, device=self.device)
+        elif self.args.dqn_type == 'ddqn':
+            max_labels = torch.tensor([action.label for action in max_actions],
+                                      dtype=torch.long, device=self.device).view(-1, 1)
+            next_state_values[non_final_mask] = \
+                self.t_net(
+                    **self.convert_to_inputs_for_update(next_states, max_actions)
+                ).gather(dim=1, index=max_labels).detach().view(-1)
+        else:
+            raise ValueError('dqn_type: dqn/ddqn')
+        
+        # compute the expected Q values
+        assert state_action_values.size() == rewards.size()
+        expected_state_action_values = next_state_values * self.eps_gamma + rewards
+        # compute Huber loss
+        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+        # optimize model
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),
+                                       self.args.max_grad_norm)
+        self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
+        self.q_net.zero_grad()
+
+        return loss.cpu().data.item()
+
+
+    def select_action(self, state: State,
+                      actions: List[Action],
+                      strategy: str='epsilon_greedy',
+                      net: nn.Module=None,
+                      is_eval: bool=False) -> Tuple[Action, float]:
+        self.t_net.eval()
+        if is_eval: self.q_net.eval()
+        
+        assert strategy in {'epsilon_greedy', 'greedy'}
+        
+        q_values = None
+        # epsilon greedy
+        sample = random.random()
+        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
+            math.exp(-1. * self.steps_done / self.eps_decay)
+        self.steps_done += 1 if strategy == 'epsilon_greedy' else 0
+        if sample > eps_threshold or strategy == 'greedy':
+            with torch.no_grad():
+                if net is None:
+                    net = self.q_net if self.dqn_type == 'ddqn' else self.t_net
+                inputs = self.convert_to_inputs_for_select_action(state, actions)
+                q_values = [net(
+                    **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))
+                ) for clip_inputs in inputs]
+                max_action = torch.cat(q_values, dim=0).argmax()
+            sent_id = max_action // self.args.num_labels
+            label_id = max_action % self.args.num_labels
+        else:
+            sent_id = random.randint(0, len(actions) // self.args.num_labels)
+            label_id = random.randint(0, self.args.num_labels)
+        action = Action(sentence=actions[sent_id].sentence, label=label_id)
+        q = q_values[sent_id, label_id] if q_values is not None else None
+        return action, q
+
+
+    def save(self, output_dir: str) -> None:
+        q_net = self.q_net.module if hasattr(self.q_net, 'module') else self.q_net
+        torch.save(q_net.state_dict(), os.path.join(output_dir, 'model.bin'))
+        torch.save(self.optimizer.state_dict(), os.path.join(output_dir, 'optimizer.pt'))
+        if self.scheduler is not None:
+            torch.save(self.scheduler.state_dict(), os.path.join(output_dir, 'scheduler.pt'))
+        self.logger.info(f'Saving model checkpoint, optimizer state to {output_dir}')
+
+
+    def load(self, input_dir: str) -> None:
+        self.q_net.load_state_dict(torch.load(os.path.join(input_dir, 'model.bin'),
+                                              map_location=lambda storage, loc: storage))
+        self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, 'optimizer.pt')))
+        if self.sheduler is not None:
+            self.sheduler.load_state_dict(torch.load(os.path.join(input_dir, 'scheduler.pt')))
+        self.soft_update_of_target_network(1)
+        self.logger.info(f'Loading model checkpoint, optimizer state from {input_dir}')
+
+
+    def soft_update_of_target_network(self, tau: float =1.) -> None:
+        """Updates the target network in the direction of the local network but by taking a step size
+        less than one so the target network's parameter values trail the local networks. This helps stabilise training"""
+        for target_param, local_param in zip(self.t_net.parameters(), self.q_net.parameters()):
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
+
+    
+    def token(self, sentences: List[str]) -> List[List[long]]:
+        return NotImplementedError()
+
+
+    def convert_to_inputs_for_select_action(self, state: State, actions: List[Action]) -> List[dict]:
+        return NotImplementedError()
+
+
+    def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
+        return NotImplementedError()
+
