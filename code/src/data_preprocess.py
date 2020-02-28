@@ -5,12 +5,12 @@ import sqlite3
 from tqdm import tqdm
 import unicodedata
 from collections import defaultdict
-
+#import pdb
 
 ENCODING = 'utf-8'
-DATABASE = '../data/fever/fever.db'
+DATABASE = './data/fever/fever.db'
 
-conn = sqlit3.connect(DATABASE)
+conn = sqlite3.connect(DATABASE)
 cursor = conn.cursor()
 
 def normalize(text: str) -> str:
@@ -21,7 +21,7 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
     print(f'Loading {in_file}')
     instances = []
     with open(in_file, 'rb') as fr:
-        for line in tqmd(fr.readlines()):
+        for line in tqdm(fr.readlines()):
             instance = json.loads(line.decode(ENCODING).strip('\r\n'))
             
             evidence_set = []
@@ -30,12 +30,12 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
                 for sent in evidence:
                     if sent[2] is None: break
                     process_evidence.append([sent[2], sent[3]])
-                if len(process_evidence):
+                if len(process_evidence) and process_evidence not in evidence_set:
                     evidence_set.append(process_evidence)
 
             instances.append({
                 'id': instance['id'],
-                'labels': instance['label'],
+                'label': instance['label'],
                 'claim': instance['claim'],
                 'evidence_set': evidence_set,
                 'predicted_pages': instance['predicted_pages']
@@ -48,7 +48,7 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
             if is_train:
                 titles += [title for evidence in instance['evidence_set'] for title, _ in evidence]
             titles = list(set(titles))
-            documents = default(dict)
+            documents = defaultdict(dict)
             for title in titles:
                 cursor.execute(
                     'SELECT * FROM documents WHERE id = ?',
@@ -67,15 +67,15 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
                         sentence = ' '.join(arr[1:])
                         if sentence == '': continue
                         documents[title][line_num] = sentence
-            fw.write(json.dumps({
+            fw.write((json.dumps({
                 'id': instance['id'],
                 'claim': instance['claim'],
                 'label': instance['label'],
                 'evidence_set': instance['evidence_set'],
                 'documents': documents
-            }) + '\n')
+            }) + '\n').encode(ENCODING))
 
 if __name__ == '__main__':
     data_process('./data/retrieved/train.wiki7.jsonl', './data/dqn/train.jsonl', is_train=True)
     data_process('./data/retrieved/dev.wiki7.jsonl', './data/dqn/dev.jsonl', is_train=False)
-    data_process('./data/retrieved/test.wiki7.jsonl', './data/dqn/test.jsonl', is_train=False)
+    #data_process('./data/retrieved/test.wiki7.jsonl', './data/dqn/test.jsonl', is_train=False)

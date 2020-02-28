@@ -4,23 +4,18 @@ def set_com_args(parser) -> None:
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        default=None,
+        default='./data/dqn/',
         type=str,
-        required=True,
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",
     )
     parser.add_argument(
-        "--model_name_or_path",
-        default=None,
-        type=str,
-        required=True,
-        help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS),
+        "--checkpoint",
+        default=None
     )
     parser.add_argument(
         "--output_dir",
-        default=None,
+        default="output",
         type=str,
-        required=True,
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
@@ -88,7 +83,7 @@ def set_com_args(parser) -> None:
 
 
 def set_dqn_args(parser) -> None:
-    parser.add_argument('--dqn_type', default='ddqn', choics=['dqn', 'ddqn'])
+    parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
     # replay memory
     parser.add_argument('--capacity', default=200000, type=int)
     # discount factor
@@ -103,32 +98,27 @@ def set_dqn_args(parser) -> None:
 
 
 def set_bert_args(parser) -> None:
+    from dqn.bert_dqn import MODEL_CLASSES
     # Required parameters
     parser.add_argument(
-        "--model_type",
-        default=None,
+        "--model_name_or_path",
+        default='./data/bert/bert-base-uncased',
         type=str,
-        required=True,
+        help="BERT retrained model"
+    )
+    parser.add_argument(
+        "--model_type",
+        default="bert",
+        type=str,
         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()),
     )
     parser.add_argument(
         "--task_name",
-        default=None,
+        default='mnli',
         type=str,
-        required=True,
-        help="The name of the task to train selected in the list: " + ", ".join(processors.keys()),
     )
 
     # Other parameters
-    parser.add_argument(
-        "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name",
-    )
-    parser.add_argument(
-        "--tokenizer_name",
-        default="",
-        type=str,
-        help="Pretrained tokenizer name or path if not the same as model_name",
-    )
     parser.add_argument(
         "--cache_dir",
         default="",

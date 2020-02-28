@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 # coding: utf-8
 import random
+from typing import List
+
+from data_structure import Transition
 
 class ReplayMemory:
     def __init__(self, capacity: int) -> None:

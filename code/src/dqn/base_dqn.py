@@ -7,8 +7,10 @@ import random
 import math
 import os
 
-from typing import List
-from ..data_structure import Transition, Action, State
+import pdb
+
+from typing import List, Tuple
+from data_structure import Transition, Action, State
 
 class BaseDQN:
     def __init__(self, args) -> None:
@@ -27,7 +29,7 @@ class BaseDQN:
         self.dqn_type = args.dqn_type
 
         self.target_update = args.target_update
-        self.step_done = 0
+        self.steps_done = 0
         self.max_seq_length = args.max_seq_length
 
         self.device = args.device
@@ -68,7 +70,7 @@ class BaseDQN:
                                dtype=torch.long, device=self.device).view(-1, 1)
         state_action_values = self.q_net(
             **self.convert_to_inputs_for_update(batch.state, batch.action)
-        ).gather(dim=1, index=labels).view(-1)
+        )[0].gather(dim=1, index=labels).view(-1)
         
         # rceward
         rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
@@ -84,7 +86,7 @@ class BaseDQN:
 
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
                                       dtype=torch.bool, device=self.device)
-        next_state_values = state_action_value.new_zeros(state_action_value.size())
+        next_state_values = state_action_values.new_zeros(state_action_values.size())
         if self.args.dqn_type == 'dqn':
             next_state_values[non_final_mask] = \
                 torch.tensor(max_q_values, dtype=torch.float, device=self.device)
@@ -94,7 +96,7 @@ class BaseDQN:
             next_state_values[non_final_mask] = \
                 self.t_net(
                     **self.convert_to_inputs_for_update(next_states, max_actions)
-                ).gather(dim=1, index=max_labels).detach().view(-1)
+                )[0].gather(dim=1, index=max_labels).detach().view(-1)
         else:
             raise ValueError('dqn_type: dqn/ddqn')
         
@@ -140,19 +142,23 @@ class BaseDQN:
                 inputs = self.convert_to_inputs_for_select_action(state, actions)
                 q_values = [net(
                     **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))
-                ) for clip_inputs in inputs]
-                max_action = torch.cat(q_values, dim=0).argmax()
+                )[0] for clip_inputs in inputs]
+                q_values = torch.cat(q_values, dim=0)
+                max_action = q_values.argmax()
             sent_id = max_action // self.args.num_labels
             label_id = max_action % self.args.num_labels
         else:
-            sent_id = random.randint(0, len(actions) // self.args.num_labels)
-            label_id = random.randint(0, self.args.num_labels)
+            #pdb.set_trace()
+            sent_id = random.randint(0, len(actions) - 1)
+            label_id = random.randint(0, self.args.num_labels - 1)
         action = Action(sentence=actions[sent_id].sentence, label=label_id)
         q = q_values[sent_id, label_id] if q_values is not None else None
         return action, q
 
 
     def save(self, output_dir: str) -> None:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
         q_net = self.q_net.module if hasattr(self.q_net, 'module') else self.q_net
         torch.save(q_net.state_dict(), os.path.join(output_dir, 'model.bin'))
         torch.save(self.optimizer.state_dict(), os.path.join(output_dir, 'optimizer.pt'))
@@ -178,7 +184,7 @@ class BaseDQN:
             target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
 
     
-    def token(self, sentences: List[str]) -> List[List[long]]:
+    def token(self, sentences: List[str]) -> List[List[int]]:
         return NotImplementedError()
 
 

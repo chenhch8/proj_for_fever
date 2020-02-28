@@ -4,16 +4,20 @@ import torch
 import numpy as np
 import logging
 import os
+import argparse
 import json
+import pickle
 import random
-from typing import List
+from typing import List, Tuple
 from tqdm import tqdm, trange
+from multiprocessing import cpu_count, Pool
 
 from dqn.bert_dqn import BertDQN
 from environment import DuEnv
 from replay_memory import ReplayMemory
 from data_structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,57 +40,64 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def train() -> None:
-    pass
-
-
-def predict() -> None:
-    pass
-
-
 def load_and_process_data(filename: str, label2id: dict, token_fn: 'function') \
         -> List[Tuple[Claim, int, EvidenceSet, List[Sentence]]]:
-    logger.info(f'Loading and processing data {filename}')
-    data = []
-    with open(filename, 'r') as fr:
-        for line in tqdm(fr.readlines()):
-            instance = json.loads(line.strip())
-            claim = Claim(str=instance['claim'],
-                          tokens=token_fn(instance['claim']))
-            sent2id = {}
-            sentences = []
-            for title, text in instance['documents'].items():
-                for line_num, sentence in text.items():
-                    sentences.append(Sentence(id=(title, int(line_num)),
-                                              str=sentence,
-                                              tokens=token_fn(sentence)))
-                    sent2id[(title, int(line_num))] = len(sentences) - 1
-            evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
-                                for title, line_num in evi] \
-                                    for evi in instance['evidence_set']]
-            data.append((claim, label2id[instance['label']], evidence_set, sentences))
+    cached_file = os.path.join(
+        '/'.join(filename.split('/')[:-1]),
+        'cached_{}.pk'.format('train' if filename.find('train') != -1 else 'dev')
+    )
+    data = None
+    if not os.path.exists(cached_file):
+        logger.info(f'Loading and processing data from {filename}')
+        data = []
+        with open(filename, 'rb') as fr:
+            for line in tqdm(fr.readlines()):
+                instance = json.loads(line.decode('utf-8').strip())
+                claim = Claim(str=instance['claim'],
+                              tokens=token_fn(instance['claim']))
+                sent2id = {}
+                sentences = []
+                for title, text in instance['documents'].items():
+                    for line_num, sentence in text.items():
+                        sentences.append(Sentence(id=(title, int(line_num)),
+                                                  str=sentence,
+                                                  tokens=token_fn(sentence)))
+                        sent2id[(title, int(line_num))] = len(sentences) - 1
+                evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
+                                    for title, line_num in evi] \
+                                        for evi in instance['evidence_set']]
+                data.append((claim, label2id[instance['label']], evidence_set, sentences))
+            with open(cached_file, 'wb') as fw:
+                pickle.dump(data, fw)
+    else:
+        logger.info(f'Loading data from {cached_file}')
+        with open(cached_file, 'rb') as fr:
+            data = pickle.load(fr)
     return data
 
 
 def run_dqn(args) -> None:
     env = Env(args.max_evi_size)
     agent = Agent(args)
+    agent.to(args.device)
     if args.do_train:
         memory = ReplayMemory(args.capacity)
         train_data = load_and_process_data(os.path.join(args.data_dir, 'train.jsonl'),
                                            args.label2id, agent.token)
-        train_ids = list(range(len(train_data)))i
-        
-        train_iterator = trange(args.num_train_epochs, desc='Epoch', disable=args.local_rank not in [-1, 0])
+        train_ids = list(range(len(train_data)))
+        if args.checkpoint:
+            agent.load(os.path.josin(args.output_dir, args.checkpoint))
+        train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
         for epoch in train_iterator:
             random.shuffle(train_ids)
             epoch_iterator = tqdm(train_ids, desc='[Train]Epoch:0', disable=args.local_rank not in [-1, 0])
+            t_loss, t_steps = 0, 0
             for i, idx in enumerate(epoch_iterator):
                 claim, label_id, evidence_set, sentences = train_data[idx]
                 state = State(claim=claim,
                               label=label_id,
                               evidence_set=evidence_set,
-                              prde_label=args.label2id['NOTENOUGHINFO'],
+                              pred_label=args.label2id['NOT ENOUGH INFO'],
                               candidate=[])
                 actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
                 while True:
@@ -94,6 +105,9 @@ def run_dqn(args) -> None:
                     state_next, reward, done = env.step(state, action)
                     next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
                             if not done else []
+                    if len(next_actions) == 0 and not done:
+                        state_next = None
+                        done = True
                     memory.push(Transition(state=state,
                                            action=action,
                                            next_state=state_next,
@@ -105,6 +119,8 @@ def run_dqn(args) -> None:
                     if len(memory) >= args.train_batch_size:
                         batch = memory.sample(args.train_batch_size)
                         loss = agent.update(batch)
+                        t_loss += loss
+                        t_steps += 1
                         epoch_iterator.set_description('[Train]Epoch:%d Loss:%.5f)' % (epoch, loss))
                         epoch_iterator.refresh()
                     if done:
@@ -112,6 +128,7 @@ def run_dqn(args) -> None:
                 if i and i % args.target_update == 0:
                     agent.soft_update_of_target_network(args.tau)
             epoch_iterator.close()
+            agent.save(os.join(args.output_dir, 'dqn', f'{epoch + 1}_{t_loss / t_steps}'))
         train_iterator.close()
     if args.do_eval:
         dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
@@ -127,7 +144,7 @@ def main() -> None:
     args = parser.parse_args()
     args.logger = logger
     args.label2id = {
-        'NOTENOUGHINFO': 2,
+        'NOT ENOUGH INFO': 2,
         'SUPPORTS': 1,
         'REFUTES': 0
     }
