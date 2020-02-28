@@ -31,6 +31,8 @@ def statics(data: DataList) -> None:
     print(f'tokens: {tokens_np.min()}-{tokens_np.max()}, {tokens_np.mean()}')
     print(f'sents_count: {sents_count[sents_np.min()]}-{sents_count[sents_np.max()]}')
     print(f'tokens_count: {tokens_count[tokens_np.min()]}-{tokens_count[tokens_np.max()]}')
+    pprint(sents_count)
+    pprint(tokens_count)
 
 if __name__ == '__main__':
     statics(load_data('./data/dqn/cache_train.pk'))
