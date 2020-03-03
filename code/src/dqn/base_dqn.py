@@ -65,17 +65,6 @@ class BaseDQN:
         self.t_net.eval()
         batch = Transition(*zip(*transitions))
         
-        # state_action value of q_net
-        labels = torch.tensor([action.label for action in batch.action],
-                               dtype=torch.long, device=self.device).view(-1, 1)
-        state_action_values = self.q_net(
-            **self.convert_to_inputs_for_update(batch.state, batch.action)
-        )[0].gather(dim=1, index=labels).view(-1)
-        #print(state_action_values.size())
-        
-        # rceward
-        rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
-        
         # max state value of t_net
         next_states = list(filter(lambda s: s is not None, batch.next_state))
         ## max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
@@ -87,7 +76,7 @@ class BaseDQN:
 
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
                                       dtype=torch.bool, device=self.device)
-        next_state_values = state_action_values.new_zeros(state_action_values.size())
+        next_state_values = torch.zeros(non_final_mask.size(), dtype=torch.float, device=self.device)
         if self.args.dqn_type == 'dqn':
             next_state_values[non_final_mask] = \
                 torch.tensor(max_q_values, dtype=torch.float, device=self.device)
@@ -98,12 +87,28 @@ class BaseDQN:
                 self.t_net(
                     **self.convert_to_inputs_for_update(next_states, max_actions)
                 )[0].gather(dim=1, index=max_labels).detach().view(-1)
+            del max_labels
         else:
             raise ValueError('dqn_type: dqn/ddqn')
+        del max_actions, max_q_values
+        
+        # rceward
+        rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
         
         # compute the expected Q values
-        assert state_action_values.size() == rewards.size()
+        assert next_state_values.size() == rewards.size()
         expected_state_action_values = next_state_values * self.eps_gamma + rewards
+        del rewards
+
+        # state_action value of q_net
+        labels = torch.tensor([action.label for action in batch.action],
+                               dtype=torch.long, device=self.device).view(-1, 1)
+        state_action_values = self.q_net(
+            **self.convert_to_inputs_for_update(batch.state, batch.action)
+        )[0].gather(dim=1, index=labels).view(-1)
+        del labels
+        #print(state_action_values.size())
+        
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
         if self.args.n_gpu > 1:
