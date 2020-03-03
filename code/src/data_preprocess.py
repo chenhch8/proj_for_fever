@@ -9,6 +9,7 @@ from collections import defaultdict
 
 ENCODING = 'utf-8'
 DATABASE = './data/fever/fever.db'
+english_punctuations = {',', '.', ':', ';', '?', '(', ')', '[', ']', '&', '!', '*', '@', '#', '$', '%'}
 
 conn = sqlite3.connect(DATABASE)
 cursor = conn.cursor()
@@ -65,8 +66,10 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
                         line_num = int(arr[0])
                         if len(arr) <= 1: continue
                         sentence = ' '.join(arr[1:])
-                        if sentence == '': continue
+                        if sentence == '' or sentence in english_punctuations: continue
                         documents[title][line_num] = sentence
+            documents = dict(documents)
+            if len(documents) == 0: continue
             fw.write((json.dumps({
                 'id': instance['id'],
                 'claim': instance['claim'],

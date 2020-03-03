@@ -40,11 +40,11 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def load_and_process_data(filename: str, label2id: dict, token_fn: 'function') \
+def load_and_process_data(filename: str, label2id: dict, max_sent_length: int, token_fn: 'function') \
         -> List[Tuple[Claim, int, EvidenceSet, List[Sentence]]]:
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}.pk'.format('train' if filename.find('train') != -1 else 'dev')
+        'cached_{}_{}.pk'.format(max_sent_length, 'train' if filename.find('train') != -1 else 'dev')
     )
     data = None
     if not os.path.exists(cached_file):
@@ -54,14 +54,14 @@ def load_and_process_data(filename: str, label2id: dict, token_fn: 'function') \
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
                 claim = Claim(str=instance['claim'],
-                              tokens=token_fn(instance['claim']))
+                              tokens=token_fn(instance['claim'])[:max_sent_length])
                 sent2id = {}
                 sentences = []
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence)))
+                                                  tokens=token_fn(sentence)[:max_sent_length]))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
                 evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                     for title, line_num in evi] \
@@ -83,7 +83,7 @@ def run_dqn(args) -> None:
     if args.do_train:
         memory = ReplayMemory(args.capacity)
         train_data = load_and_process_data(os.path.join(args.data_dir, 'train.jsonl'),
-                                           args.label2id, agent.token)
+                                           args.label2id, args.max_sent_length, agent.token)
         train_ids = list(range(len(train_data)))
         if args.checkpoint:
             agent.load(os.path.josin(args.output_dir, args.checkpoint))
@@ -132,7 +132,7 @@ def run_dqn(args) -> None:
         train_iterator.close()
     if args.do_eval:
         dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
-                                         args.label2id, agent.token)
+                                         args.label2id, args.max_sent_length, agent.token)
         pass
 
 

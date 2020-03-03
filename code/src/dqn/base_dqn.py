@@ -71,6 +71,7 @@ class BaseDQN:
         state_action_values = self.q_net(
             **self.convert_to_inputs_for_update(batch.state, batch.action)
         )[0].gather(dim=1, index=labels).view(-1)
+        #print(state_action_values.size())
         
         # rceward
         rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
@@ -170,8 +171,9 @@ class BaseDQN:
     def load(self, input_dir: str) -> None:
         self.q_net.load_state_dict(torch.load(os.path.join(input_dir, 'model.bin'),
                                               map_location=lambda storage, loc: storage))
-        self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, 'optimizer.pt')))
-        if self.sheduler is not None:
+        if os.path.exists(os.path.join(input_dir, 'optimizer.pt')):
+            self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, 'optimizer.pt')))
+        if self.sheduler is not None and os.path.exists(os.path.join(input_dir, 'scheduler.pt')):
             self.sheduler.load_state_dict(torch.load(os.path.join(input_dir, 'scheduler.pt')))
         self.soft_update_of_target_network(1)
         self.logger.info(f'Loading model checkpoint, optimizer state from {input_dir}')
