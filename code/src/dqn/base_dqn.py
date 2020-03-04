@@ -175,12 +175,13 @@ class BaseDQN:
 
 
     def load(self, input_dir: str) -> None:
-        self.q_net.load_state_dict(torch.load(os.path.join(input_dir, 'model.bin'),
-                                              map_location=lambda storage, loc: storage))
+        q_net = self.q_net.module if self.args.n_gpu > 1 else q_net
+        q_net.load_state_dict(torch.load(os.path.join(input_dir, 'model.bin'),
+                                         map_location=lambda storage, loc: storage))
         if os.path.exists(os.path.join(input_dir, 'optimizer.pt')):
             self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, 'optimizer.pt')))
-        if self.sheduler is not None and os.path.exists(os.path.join(input_dir, 'scheduler.pt')):
-            self.sheduler.load_state_dict(torch.load(os.path.join(input_dir, 'scheduler.pt')))
+        if self.scheduler is not None and os.path.exists(os.path.join(input_dir, 'scheduler.pt')):
+            self.scheduler.load_state_dict(torch.load(os.path.join(input_dir, 'scheduler.pt')))
         self.soft_update_of_target_network(1)
         self.logger.info(f'Loading model checkpoint, optimizer state from {input_dir}')
 

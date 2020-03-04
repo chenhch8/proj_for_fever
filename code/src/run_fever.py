@@ -106,17 +106,28 @@ def train(args,
           agent: Agent,
           memory: ReplayMemory,
           train_data: DataSet,
+          epochs_trained: int=0,
+          loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0) -> None:
-    global_steps = 0
     train_ids = list(range(len(train_data)))
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
     for epoch in train_iterator:
         random.shuffle(train_ids)
-        epoch_iterator = tqdm(train_ids, desc='[Train]Epoch:0', disable=args.local_rank not in [-1, 0])
-        t_loss, t_steps = 0, 0
+        if epochs_trained > 0:
+            epochs_trained -= 1
+            continue
+        epoch_iterator = tqdm(train_ids,
+                              desc='[Train]Loss:---------',
+                              disable=args.local_rank not in [-1, 0])
+        t_loss, t_steps = loss_trained_in_current_epoch, steps_trained_in_current_epoch
         for i, idx in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
+                if steps_trained_in_current_epoch == t_steps:
+                    print('\nRestoring:', end='')
                 steps_trained_in_current_epoch -= 1
+                present = (t_steps - steps_trained_in_current_epoch) / float(t_steps)
+                if present in [float(i) / 10. for i in range(1, 11)]:
+                    print(f'{int(present * 100)}%', end='->' if steps_trained_in_current_epoch else '\n')
                 continue
             claim, label_id, evidence_set, sentences = train_data[idx]
             state = State(claim=claim,
@@ -150,12 +161,11 @@ def train(args,
                     epoch_iterator.refresh()
                 if done:
                     break
-            global_steps += 1
             if i and i % args.target_update == 0:
                 agent.soft_update_of_target_network(args.tau)
             
             if i and i % args.save_steps == 0:
-                save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch + 1}-{global_steps}-{t_loss / t_steps}')
+                save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch}-{i + 1}-{t_loss / t_steps}')
                 agent.save(save_dir)
                 with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                     pickle.dump(memory, fw)
@@ -163,7 +173,7 @@ def train(args,
         epoch_iterator.close()
         
         if steps_trained_in_current_epoch == 0:
-            save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch + 1}-{global_steps}-{t_loss / t_steps}')
+            save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch + 1}-0-{t_loss / t_steps}')
             agent.save(save_dir)
             with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                 pickle.dump(memory, fw)
@@ -237,14 +247,21 @@ def run_dqn(args) -> None:
         memory = ReplayMemory(args.capacity)
         train_data = load_and_process_data(os.path.join(args.data_dir, 'train.jsonl'),
                                            args.label2id, args.max_sent_length, agent.token)
+        epochs_trained = 0
+        loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0
         if args.checkpoint:
-            steps_trained_in_current_epoch = int(args.checkpoint.split('-')[1])
-            load_dir = os.path.join(args.output_dir, args.checkpoint)
-            agent.load(load_dir)
-            with open(os.path.join(load_dir, 'memory.pk'), 'rb') as fr:
+            names = list(filter(lambda x: x != '', args.checkpoint.split('/')))[-1].split('-')
+            epochs_trained = int(names[0])
+            steps_trained_in_current_epoch = int(names[1])
+            loss_trained_in_current_epoch = float('.'.join(names[2].split('.')[:-1])) * steps_trained_in_current_epoch
+            agent.load(args.checkpoint)
+            with open(os.path.join(args.checkpoint, 'memory.pk'), 'rb') as fr:
                 memory = pickle.load(fr)
-        train(args, env, agent, memory, train_data, steps_trained_in_current_epoch)
+        train(args, env, agent, memory, train_data,
+              epochs_trained,
+              loss_trained_in_current_epoch,
+              steps_trained_in_current_epoch)
         
     if args.do_eval:
         assert args.checkpoint is not None
