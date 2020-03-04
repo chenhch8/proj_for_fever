@@ -69,7 +69,10 @@ class BaseDQN:
         next_states = list(filter(lambda s: s is not None, batch.next_state))
         ## max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
         max_actions, max_q_values = \
-            tuple(zip(*[self.select_action(next_state, next_actions, strategy='greedy') \
+            tuple(zip(*[self.select_action(next_state, \
+                                           next_actions, \
+                                           strategy='greedy', \
+                                           net=self.q_net if dqn_type = 'ddqn' else self.t_net) \
                          for next_state, next_actions in zip(batch.next_state, batch.next_actions) \
                             if next_state is not None]))
         assert len(max_actions) == len(next_states)
@@ -127,11 +130,11 @@ class BaseDQN:
 
     def select_action(self, state: State,
                       actions: List[Action],
+                      net: nn.Module,
                       strategy: str='epsilon_greedy',
-                      net: nn.Module=None,
                       is_eval: bool=False) -> Tuple[Action, float]:
         self.t_net.eval()
-        if is_eval: self.q_net.eval()
+        if is_eval: net.eval()
         
         assert strategy in {'epsilon_greedy', 'greedy'}
         
@@ -143,8 +146,6 @@ class BaseDQN:
         self.steps_done += 1 if strategy == 'epsilon_greedy' else 0
         if sample > eps_threshold or strategy == 'greedy':
             with torch.no_grad():
-                if net is None:
-                    net = self.q_net if self.dqn_type == 'ddqn' else self.t_net
                 inputs = self.convert_to_inputs_for_select_action(state, actions)
                 q_values = [net(
                     **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))

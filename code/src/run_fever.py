@@ -18,6 +18,7 @@ from replay_memory import ReplayMemory
 from data_structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
 
+from scorer import fever_score
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,8 @@ def load_and_process_data(filename: str, label2id: dict, max_sent_length: int, t
         with open(filename, 'rb') as fr:
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
-                claim = Claim(str=instance['claim'],
+                claim = Claim(id=instance['id'],
+                              str=instance['claim'],
                               tokens=token_fn(instance['claim'])[:max_sent_length])
                 sent2id = {}
                 sentences = []
@@ -77,12 +79,34 @@ def load_and_process_data(filename: str, label2id: dict, max_sent_length: int, t
     return data
 
 
-def train(env: Env,
+def calc_fever_score(predicted_list: List[dict], true_file: str) \
+        -> Tuple[List[dict], float, float, float, float, float]:
+    ids = set(map(lambda item: int(item['id']), predicted_list))
+    logger.info('Calculating FEVER score')
+    logger.info(f'Loading true data from {true_file}')
+    with open(true_file, 'r') as fr:
+        for line in tqdm(fr.readlines()):
+            instance = json.loads(line.strip())
+            if int(instance['id']) not in ids:
+                predicted_list.append({
+                    'id': instance['id'],
+                    'label': instance['label'],
+                    'evidence': instance['evidence'],
+                    'predicted_label': 'NOT ENOUGH INFO',
+                    'predicted_evidence': []
+                })
+    assert len(predicted_list) == 19998
+    strict_score, label_accuracy, precision, recall, f1 = fever_score(predicted_list)
+    logger.info(f'FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
+    return predicted_list, strict_score, label_accuracy, precision, recall, f1
+
+
+def train(args,
+          env: Env,
           agent: Agent,
           memory: ReplayMemory,
           train_data: DataSet,
-          steps_trained_in_current_epoch: int,
-          args) -> None:
+          steps_trained_in_current_epoch: int=0) -> None:
     global_steps = 0
     train_ids = list(range(len(train_data)))
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
@@ -102,7 +126,7 @@ def train(env: Env,
                           candidate=[])
             actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
             while True:
-                action, _ = agent.select_action(state, actions, net=agent.q_net)
+                action, _ = agent.select_action(state, actions, net=agent.q_net, is_eval=False)
                 state_next, reward, done = env.step(state, action)
                 next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
                         if not done else []
@@ -146,6 +170,65 @@ def train(env: Env,
     train_iterator.close()
 
 
+def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSet=None):
+    agent.q_net.eval()
+    if dev_data is None:
+        dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
+                                         args.label2id, args.max_sent_length, agent.token)
+    results = []
+    logger.info('Evaluating')
+    for claim, label_id, evidence_set, sentences in tqdm(dev_data):
+        state = State(claim=claim,
+                      label=label_id,
+                      evidence_set=evidence_set,
+                      pred_label=args.label2id['NOT ENOUGH INFO'],
+                      candidate=[])
+        actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
+        q_values, states = [], []
+        while True:
+            action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
+            state_next, reward, done = env.step(state, action)
+            next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
+                    if not done else []
+            if len(next_actions) == 0 and not done:
+                state_next = None
+                done = True
+            q_values.append(q_value)
+            states.append(state)
+            state = state_next
+            actions = next_actions
+            if done:
+                break
+        
+        score_t = q_values[-1]
+        max_score = score_t
+        max_t = len(q_values) - 1
+        for t in range(len(states) - 2, -1, -1):
+            score_t = q_values[t] - args.eps_gamma * q_values[t + 1] + score_t
+            if max_score < score_t:
+                max_score = score_t
+                max_t = t
+        results.append({
+            'id': claim.id,
+            'label': args.id2label[states[max_t].label],
+            'evidence': states[max_t].evidence_set,
+            'predicted_label': args.id2label[states[max_t].pred_label],
+            'predicted_evidence': \
+                reduce(lambda seq1, seq2: seq1 + seq2,
+                       map(lambda sent: sent.tokens, states[max_t].candidate)) \
+                    if states[max_t].pred_label != args.label2id['NOT ENOUGH INFO'] else []
+        })
+    
+    predicted_list, strict_score, label_accuracy, precision, recall, f1 = calc_fever_score(results, args.dev_true_file)
+    with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
+        json.dump({
+            'score': (strict_score, label_accuracy, precision, recall, f1),
+            'predicted_list': predicted_list
+        }, fw)
+    logger.info(f'Results are saved in {os.path.join(load_dir, predicted_result.json)}')
+
+
+
 def run_dqn(args) -> None:
     env = Env(args.max_evi_size)
     agent = Agent(args)
@@ -158,15 +241,18 @@ def run_dqn(args) -> None:
         if args.checkpoint:
             steps_trained_in_current_epoch = int(args.checkpoint.split('-')[1])
             load_dir = os.path.join(args.output_dir, args.checkpoint)
-            agent.load(os.path.join(args.output_dir, args.checkpoint))
+            agent.load(load_dir)
             with open(os.path.join(load_dir, 'memory.pk'), 'rb') as fr:
                 memory = pickle.load(fr)
-        train(env, agent, memory, train_data, steps_trained_in_current_epoch, args)
+        train(args, env, agent, memory, train_data, steps_trained_in_current_epoch)
         
     if args.do_eval:
+        assert args.checkpoint is not None
+        load_dir = os.path.join(args.output_dir, args.checkpoint)
+        agent.load(load_dir)
         dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
                                          args.label2id, args.max_sent_length, agent.token)
-        
+        evaluate(args, env, agent, load_dir, dev_data)
 
 
 def main() -> None:
@@ -181,6 +267,7 @@ def main() -> None:
         'SUPPORTS': 1,
         'REFUTES': 0
     }
+    args.id2label = ['REFUTES', 'SUPPORTS', 'NOT ENOUGH INFO']
     logger.info(vars(args))
 
     if (

@@ -6,7 +6,7 @@ Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'
 Action = namedtuple('Action', ('label', 'sentence'))
 State = namedtuple('State', ('claim', 'label', 'evidence_set', 'candidate', 'pred_label'))
 Sentence = namedtuple('Sentence', ('id', 'tokens', 'str'))
-Claim = namedtuple('Claim', ('str', 'tokens'))
+Claim = namedtuple('Claim', ('id', 'str', 'tokens'))
 Evidence = List[Sentence]
 EvidenceSet = List[Evidence]
 
