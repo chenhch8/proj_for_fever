@@ -121,7 +121,7 @@ def run_dqn(args) -> None:
                         loss = agent.update(batch)
                         t_loss += loss
                         t_steps += 1
-                        epoch_iterator.set_description('[Train]Epoch:%d Loss:%.5f)' % (epoch, loss))
+                        epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
                         epoch_iterator.refresh()
                     if done:
                         break
