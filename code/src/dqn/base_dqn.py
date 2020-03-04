@@ -72,7 +72,7 @@ class BaseDQN:
             tuple(zip(*[self.select_action(next_state, \
                                            next_actions, \
                                            strategy='greedy', \
-                                           net=self.q_net if dqn_type = 'ddqn' else self.t_net) \
+                                           net=self.q_net if self.dqn_type == 'ddqn' else self.t_net) \
                          for next_state, next_actions in zip(batch.next_state, batch.next_actions) \
                             if next_state is not None]))
         assert len(max_actions) == len(next_states)
