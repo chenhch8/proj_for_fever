@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 Agent = BertDQN
 Env = DuEnv
 
+DataSet = List[Tuple[Claim, int, Evidence, List[Sentence]]]
 
 def set_random_seeds(random_seed):
     """Sets all possible random seeds so results can be reproduced"""
@@ -41,7 +42,7 @@ def set_random_seeds(random_seed):
 
 
 def load_and_process_data(filename: str, label2id: dict, max_sent_length: int, token_fn: 'function') \
-        -> List[Tuple[Claim, int, EvidenceSet, List[Sentence]]]:
+        -> DataSet:
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
         'cached_{}_{}.pk'.format(max_sent_length, 'train' if filename.find('train') != -1 else 'dev')
@@ -76,6 +77,75 @@ def load_and_process_data(filename: str, label2id: dict, max_sent_length: int, t
     return data
 
 
+def train(env: Env,
+          agent: Agent,
+          memory: ReplayMemory,
+          train_data: DataSet,
+          steps_trained_in_current_epoch: int,
+          args) -> None:
+    global_steps = 0
+    train_ids = list(range(len(train_data)))
+    train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
+    for epoch in train_iterator:
+        random.shuffle(train_ids)
+        epoch_iterator = tqdm(train_ids, desc='[Train]Epoch:0', disable=args.local_rank not in [-1, 0])
+        t_loss, t_steps = 0, 0
+        for i, idx in enumerate(epoch_iterator):
+            if steps_trained_in_current_epoch > 0:
+                steps_trained_in_current_epoch -= 1
+                continue
+            claim, label_id, evidence_set, sentences = train_data[idx]
+            state = State(claim=claim,
+                          label=label_id,
+                          evidence_set=evidence_set,
+                          pred_label=args.label2id['NOT ENOUGH INFO'],
+                          candidate=[])
+            actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
+            while True:
+                action, _ = agent.select_action(state, actions, net=agent.q_net)
+                state_next, reward, done = env.step(state, action)
+                next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
+                        if not done else []
+                if len(next_actions) == 0 and not done:
+                    state_next = None
+                    done = True
+                memory.push(Transition(state=state,
+                                       action=action,
+                                       next_state=state_next,
+                                       reward=reward,
+                                       next_actions=next_actions))
+                state = state_next
+                actions = next_actions
+                # sample batch data and optimize model
+                if len(memory) >= args.train_batch_size:
+                    batch = memory.sample(args.train_batch_size)
+                    loss = agent.update(batch)
+                    t_loss += loss
+                    t_steps += 1
+                    epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
+                    epoch_iterator.refresh()
+                if done:
+                    break
+            global_steps += 1
+            if i and i % args.target_update == 0:
+                agent.soft_update_of_target_network(args.tau)
+            
+            if i and i % args.save_steps == 0:
+                save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch + 1}-{global_steps}-{t_loss / t_steps}')
+                agent.save(save_dir)
+                with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
+                    pickle.dump(memory, fw)
+
+        epoch_iterator.close()
+        
+        if steps_trained_in_current_epoch == 0:
+            save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch + 1}-{global_steps}-{t_loss / t_steps}')
+            agent.save(save_dir)
+            with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
+                pickle.dump(memory, fw)
+    train_iterator.close()
+
+
 def run_dqn(args) -> None:
     env = Env(args.max_evi_size)
     agent = Agent(args)
@@ -84,56 +154,19 @@ def run_dqn(args) -> None:
         memory = ReplayMemory(args.capacity)
         train_data = load_and_process_data(os.path.join(args.data_dir, 'train.jsonl'),
                                            args.label2id, args.max_sent_length, agent.token)
-        train_ids = list(range(len(train_data)))
+        steps_trained_in_current_epoch = 0
         if args.checkpoint:
-            agent.load(os.path.josin(args.output_dir, args.checkpoint))
-        train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
-        for epoch in train_iterator:
-            random.shuffle(train_ids)
-            epoch_iterator = tqdm(train_ids, desc='[Train]Epoch:0', disable=args.local_rank not in [-1, 0])
-            t_loss, t_steps = 0, 0
-            for i, idx in enumerate(epoch_iterator):
-                claim, label_id, evidence_set, sentences = train_data[idx]
-                state = State(claim=claim,
-                              label=label_id,
-                              evidence_set=evidence_set,
-                              pred_label=args.label2id['NOT ENOUGH INFO'],
-                              candidate=[])
-                actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
-                while True:
-                    action, _ = agent.select_action(state, actions, net=agent.q_net)
-                    state_next, reward, done = env.step(state, action)
-                    next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
-                            if not done else []
-                    if len(next_actions) == 0 and not done:
-                        state_next = None
-                        done = True
-                    memory.push(Transition(state=state,
-                                           action=action,
-                                           next_state=state_next,
-                                           reward=reward,
-                                           next_actions=next_actions))
-                    state = state_next
-                    actions = next_actions
-                    # sample batch data and optimize model
-                    if len(memory) >= args.train_batch_size:
-                        batch = memory.sample(args.train_batch_size)
-                        loss = agent.update(batch)
-                        t_loss += loss
-                        t_steps += 1
-                        epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
-                        epoch_iterator.refresh()
-                    if done:
-                        break
-                if i and i % args.target_update == 0:
-                    agent.soft_update_of_target_network(args.tau)
-            epoch_iterator.close()
-            agent.save(os.join(args.output_dir, 'dqn', f'{epoch + 1}_{t_loss / t_steps}'))
-        train_iterator.close()
+            steps_trained_in_current_epoch = int(args.checkpoint.split('-')[1])
+            load_dir = os.path.join(args.output_dir, args.checkpoint)
+            agent.load(os.path.join(args.output_dir, args.checkpoint))
+            with open(os.path.join(load_dir, 'memory.pk'), 'rb') as fr:
+                memory = pickle.load(fr)
+        train(env, agent, memory, train_data, steps_trained_in_current_epoch, args)
+        
     if args.do_eval:
         dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
                                          args.label2id, args.max_sent_length, agent.token)
-        pass
+        
 
 
 def main() -> None:
