@@ -6,6 +6,7 @@ from tqdm import tqdm
 import sqlite3
 import unicodedata
 from collections import defaultdict
+import json
 #import pdb
 
 ENCODING = 'utf-8'
@@ -19,13 +20,16 @@ cursor = conn.cursor()
 import pdb
 
 #csv.field_size_limit(sys.maxsize)
+def normalize(text: str) -> str:
+    """Resolve different type of unicode encodings."""
+    return unicodedata.normalize('NFD', text)
 
 def process_data(instances):
     new_instances = []
     for instance in tqdm(instances):
         evidence_set = set(map(lambda evidence: tuple(map(lambda sent: (sent[2], sent[3]),
                                                           evidence)),
-                               instance['evidence'])) if label != 'NOT ENOUGH INFO' else []
+                               instance['evidence'])) if instance['label'] != 'NOT ENOUGH INFO' else []
         pred_evidence = tuple(map(lambda sent: (sent[0], sent[1]), instance['predicted_evidence']))
         
         titles = [sent[0] for evidence in evidence_set for sent in evidence] + \
@@ -57,16 +61,16 @@ def process_data(instances):
             evi_str = ' '.join([documents[title][line_num] for title, line_num in evidence[:5]])
             label = instance['label'] if len(evidence) <= 5 else 'NOT ENOUGH INFO'
             new_instances.append({
-                'id': instance['id'],
+                'id': str(instance['id']),
                 'claim': instance['claim'],
                 'evidence': evi_str,
                 'label': label
             })
         for title, line_num in pred_evidence:
-            if ((title, line_num),) in evidence_set or line_num not in documents[title]:
-                continue
+            if ((title, line_num),) in evidence_set or title not in documents: continue
+            if line_num not in documents[title]: continue
             new_instances.append({
-                'id': instance['id'],
+                'id': str(instance['id']),
                 'claim': instance['claim'],
                 'evidence': documents[title][line_num],
                 'label': 'NOT ENOUGH INFO'
