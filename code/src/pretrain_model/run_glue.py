@@ -206,6 +206,14 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
+
+        output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+        model_to_save.save_pretrained(output_dir)
+        torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+        logger.info("Saving model checkpoint to %s", output_dir)
         
         with torch.no_grad():
             evaluate(args, model, tokenizer)
