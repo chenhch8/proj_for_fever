@@ -51,10 +51,10 @@ def set_com_args(parser) -> None:
     )
 
     parser.add_argument(
-        "--per_gpu_train_batch_size", default=13, type=int, help="Batch size per GPU/CPU for training.",
+        "--per_gpu_train_batch_size", default=12, type=int, help="Batch size per GPU/CPU for training.",
     )
     parser.add_argument(
-        "--per_gpu_eval_batch_size", default=13, type=int, help="Batch size per GPU/CPU for evaluation.",
+        "--per_gpu_eval_batch_size", default=12, type=int, help="Batch size per GPU/CPU for evaluation.",
     )
     parser.add_argument("--learning_rate", default=5e-5, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")

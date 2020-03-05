@@ -10,7 +10,7 @@ from typing import List
 import pdb
 
 from .base_dqn import BaseDQN
-from data_structure import Action, State, Transition
+from data.structure import Action, State, Transition
 
 from transformers import (WEIGHTS_NAME, BertConfig,
                                   BertForSequenceClassification, BertTokenizer,

@@ -10,7 +10,7 @@ import os
 import pdb
 
 from typing import List, Tuple
-from data_structure import Transition, Action, State
+from data.structure import Transition, Action, State
 
 class BaseDQN:
     def __init__(self, args) -> None:

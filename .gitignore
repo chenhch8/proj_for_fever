@@ -1,3 +1,4 @@
 code/data/*
 code/output/*
 */**/__pycache__
+code/*.sh

@@ -3,7 +3,7 @@
 import random
 from typing import List
 
-from data_structure import Transition
+from data.structure import Transition
 
 class ReplayMemory:
     def __init__(self, capacity: int) -> None:

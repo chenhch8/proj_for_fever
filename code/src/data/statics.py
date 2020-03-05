@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding=utf-8
-from data_structure import *
+from .structure import *
 from collections import Counter, defaultdict
 from typing import Tuple, List
 import numpy as np
@@ -85,4 +85,4 @@ def statics(data: DataList) -> None:
     dis_statics(evi_tokens_np.min(), evi_tokens_np.max(), evi_tokens_count)
 
 if __name__ == '__main__':
-    statics(load_data('./data/dqn/cached_train.pk'))
+    statics(load_data('./data/dqn/cached_64_train.pk'))

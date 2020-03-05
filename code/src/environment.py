@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding=utf-8
-from data_structure import State, Evidence, Action
+from data.structure import State, Evidence, Action
 from typing import Tuple
 
 class BaseEnv:

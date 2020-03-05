@@ -15,7 +15,7 @@ from multiprocessing import cpu_count, Pool
 from dqn.bert_dqn import BertDQN
 from environment import DuEnv
 from replay_memory import ReplayMemory
-from data_structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
+from data.structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
 
 from scorer import fever_score
