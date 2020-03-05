@@ -42,11 +42,13 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def load_and_process_data(filename: str, label2id: dict, max_sent_length: int, token_fn: 'function') \
+def load_and_process_data(args: dict, filename: str, label2id: dict, token_fn: 'function') \
         -> DataSet:
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}.pk'.format(max_sent_length, 'train' if filename.find('train') != -1 else 'dev')
+        'cached_{}_{}_{}.pk'.format('train' if filename.find('train') != -1 else 'dev',
+                                    list(filter(None, args.model_name_or_path.split('/'))).pop(),
+                                    args.max_sent_length)
     )
     data = None
     if not os.path.exists(cached_file):
