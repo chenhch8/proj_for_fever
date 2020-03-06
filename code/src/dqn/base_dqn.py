@@ -71,7 +71,7 @@ class BaseDQN:
         max_actions, max_q_values = \
             tuple(zip(*[self.select_action(next_state, \
                                            next_actions, \
-                                           strategy='greedy', \
+                                           is_eval=False, \
                                            net=self.q_net if self.dqn_type == 'ddqn' else self.t_net) \
                          for next_state, next_actions in zip(batch.next_state, batch.next_actions) \
                             if next_state is not None]))
@@ -131,27 +131,24 @@ class BaseDQN:
     def select_action(self, state: State,
                       actions: List[Action],
                       net: nn.Module,
-                      strategy: str='epsilon_greedy',
                       is_eval: bool=False) -> Tuple[Action, float]:
         self.t_net.eval()
         if is_eval: net.eval()
-        
-        assert strategy in {'epsilon_greedy', 'greedy'}
         
         q_values = None
         # epsilon greedy
         sample = random.random()
         eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
             math.exp(-1. * self.steps_done / self.eps_decay)
-        self.steps_done += 1 if strategy == 'epsilon_greedy' else 0
-        if sample > eps_threshold or strategy == 'greedy':
+        self.steps_done += 1 if not is_eval else 0
+        if sample > eps_threshold or is_eval:
             with torch.no_grad():
                 inputs = self.convert_to_inputs_for_select_action(state, actions)
                 q_values = [net(
                     **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))
                 )[0] for clip_inputs in inputs]
                 q_values = torch.cat(q_values, dim=0)
-                max_action = q_values.argmax()
+                max_action = q_values.argmax().cpu().data.item()
             sent_id = max_action // self.args.num_labels
             label_id = max_action % self.args.num_labels
         else:
@@ -159,7 +156,7 @@ class BaseDQN:
             sent_id = random.randint(0, len(actions) - 1)
             label_id = random.randint(0, self.args.num_labels - 1)
         action = Action(sentence=actions[sent_id].sentence, label=label_id)
-        q = q_values[sent_id, label_id] if q_values is not None else None
+        q = q_values[sent_id, label_id].cpu().data.item() if q_values is not None else None
         return action, q
 
 
@@ -167,23 +164,35 @@ class BaseDQN:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
         q_net = self.q_net.module if hasattr(self.q_net, 'module') else self.q_net
-        torch.save(q_net.state_dict(), os.path.join(output_dir, 'model.bin'))
-        torch.save(self.optimizer.state_dict(), os.path.join(output_dir, 'optimizer.pt'))
+        state_dict = {
+            'q_net': q_net.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'steps_done': self.steps_done
+        }
         if self.scheduler is not None:
-            torch.save(self.scheduler.state_dict(), os.path.join(output_dir, 'scheduler.pt'))
-        self.logger.info(f'Saving model checkpoint, optimizer state to {output_dir}')
+            state_dict['scheduler'] = self.scheduler.state_dict()
+        torch.save(state_dict, os.path.join(output_dir, 'model.bin'))
+        self.logger.info(f'Saving checkpoint to {output_dir}')
 
 
     def load(self, input_dir: str) -> None:
-        q_net = self.q_net.module if self.args.n_gpu > 1 else q_net
-        q_net.load_state_dict(torch.load(os.path.join(input_dir, 'model.bin'),
-                                         map_location=lambda storage, loc: storage))
-        if os.path.exists(os.path.join(input_dir, 'optimizer.pt')):
-            self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, 'optimizer.pt')))
-        if self.scheduler is not None and os.path.exists(os.path.join(input_dir, 'scheduler.pt')):
-            self.scheduler.load_state_dict(torch.load(os.path.join(input_dir, 'scheduler.pt')))
+        q_net = self.q_net.module if self.args.n_gpu > 1 else self.q_net
+        state_dict = torch.load(os.path.join(input_dir, 'model.bin'),
+                                map_location=lambda storage, loc: storage)
+        q_net.load_state_dict(state_dict['q_net'])
+        if 'steps_done' in state_dict:
+            self.steps_done = state_dict['steps_done']
+        if 'optimizer' in state_dict:
+            self.optimizer.load_state_dict(state_dict['optimizer'])
+        if self.scheduler is not None and 'scheduler' in state_dict:
+            self.scheduler.load_state_dict(['scheduler'])
         self.soft_update_of_target_network(1)
-        self.logger.info(f'Loading model checkpoint, optimizer state from {input_dir}')
+        self.logger.info(f'Loading model from {input_dir}')
+
+
+    def eval(self):
+        self.q_net.eval()
+        self.t_net.eval()
 
 
     def soft_update_of_target_network(self, tau: float =1.) -> None:

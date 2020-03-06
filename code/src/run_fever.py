@@ -10,7 +10,8 @@ import pickle
 import random
 from typing import List, Tuple
 from tqdm import tqdm, trange
-from multiprocessing import cpu_count, Pool
+from functools import reduce
+#from multiprocessing import cpu_count, Pool
 
 from dqn.bert_dqn import BertDQN
 from environment import DuEnv
@@ -19,9 +20,9 @@ from data.structure import Transition, Action, State, Claim, Sentence, Evidence,
 from config import set_com_args, set_dqn_args, set_bert_args
 
 from scorer import fever_score
+import pdb
 
 logger = logging.getLogger(__name__)
-
 
 Agent = BertDQN
 Env = DuEnv
@@ -42,7 +43,7 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def load_and_process_data(args: dict, filename: str, label2id: dict, token_fn: 'function') \
+def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
         -> DataSet:
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
@@ -59,19 +60,20 @@ def load_and_process_data(args: dict, filename: str, label2id: dict, token_fn: '
                 instance = json.loads(line.decode('utf-8').strip())
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=token_fn(instance['claim'])[:max_sent_length])
+                              tokens=token_fn(instance['claim'])[:args.max_sent_length])
                 sent2id = {}
                 sentences = []
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence)[:max_sent_length]))
+                                                  tokens=token_fn(sentence)[:args.max_sent_length]))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
                 evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                     for title, line_num in evi] \
-                                        for evi in instance['evidence_set']]
-                data.append((claim, label2id[instance['label']], evidence_set, sentences))
+                                        for evi in instance['evidence_set']] \
+                                if not is_eval else instance['evidence_set']
+                data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
     else:
@@ -167,7 +169,7 @@ def train(args,
                 agent.soft_update_of_target_network(args.tau)
             
             if i and i % args.save_steps == 0:
-                save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch}-{i + 1}-{t_loss / t_steps}')
+                save_dir = os.path.join(args.output_dir, f'{epoch}-{i + 1}-{t_loss / t_steps}')
                 agent.save(save_dir)
                 with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                     pickle.dump(memory, fw)
@@ -175,7 +177,7 @@ def train(args,
         epoch_iterator.close()
         
         if steps_trained_in_current_epoch == 0:
-            save_dir = os.path.join(args.output_dir, 'dqn', f'{epoch + 1}-0-{t_loss / t_steps}')
+            save_dir = os.path.join(args.output_dir, f'{epoch + 1}-0-{t_loss / t_steps}')
             agent.save(save_dir)
             with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                 pickle.dump(memory, fw)
@@ -183,53 +185,55 @@ def train(args,
 
 
 def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSet=None):
-    agent.q_net.eval()
+    agent.eval()
     if dev_data is None:
-        dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
-                                         args.label2id, args.max_sent_length, agent.token)
+        dev_data = load_and_process_data(args,
+                                         os.path.join(args.data_dir, 'dev.jsonl'),
+                                         agent.token)
     results = []
     logger.info('Evaluating')
-    for claim, label_id, evidence_set, sentences in tqdm(dev_data):
-        state = State(claim=claim,
-                      label=label_id,
-                      evidence_set=evidence_set,
-                      pred_label=args.label2id['NOT ENOUGH INFO'],
-                      candidate=[])
-        actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
-        q_values, states = [], []
-        while True:
-            action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
-            state_next, reward, done = env.step(state, action)
-            next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
-                    if not done else []
-            if len(next_actions) == 0 and not done:
-                state_next = None
-                done = True
-            q_values.append(q_value)
-            states.append(state)
-            state = state_next
-            actions = next_actions
-            if done:
-                break
-        
-        score_t = q_values[-1]
-        max_score = score_t
-        max_t = len(q_values) - 1
-        for t in range(len(states) - 2, -1, -1):
-            score_t = q_values[t] - args.eps_gamma * q_values[t + 1] + score_t
-            if max_score < score_t:
-                max_score = score_t
-                max_t = t
-        results.append({
-            'id': claim.id,
-            'label': args.id2label[states[max_t].label],
-            'evidence': states[max_t].evidence_set,
-            'predicted_label': args.id2label[states[max_t].pred_label],
-            'predicted_evidence': \
-                reduce(lambda seq1, seq2: seq1 + seq2,
-                       map(lambda sent: sent.tokens, states[max_t].candidate)) \
-                    if states[max_t].pred_label != args.label2id['NOT ENOUGH INFO'] else []
-        })
+    #pdb.set_trace()
+    with torch.no_grad():
+        for claim, label_id, evidence_set, sentences in tqdm(dev_data):
+            state = State(claim=claim,
+                          label=label_id,
+                          evidence_set=evidence_set,
+                          pred_label=args.label2id['NOT ENOUGH INFO'],
+                          candidate=[])
+            actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
+            q_values, states = [], []
+            for _ in range(args.max_evi_size):
+                action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
+                state_next = State(claim=state.claim,
+                                   label=state.label,
+                                   evidence_set=state.evidence_set,
+                                   candidate=state.candidate + [action.sentence],
+                                   pred_label=action.label)
+                next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions))
+                q_values.append(q_value)
+                states.append(state)
+                state = state_next
+                actions = next_actions
+                if len(next_actions) == 0: break
+            
+            score_t = q_values[-1]
+            max_score = score_t
+            max_t = len(q_values) - 1
+            for t in range(len(states) - 2, -1, -1):
+                score_t = q_values[t] - args.eps_gamma * q_values[t + 1] + score_t
+                if max_score < score_t:
+                    max_score = score_t
+                    max_t = t
+            results.append({
+                'id': claim.id,
+                'label': args.id2label[states[max_t].label],
+                'evidence': states[max_t].evidence_set,
+                'predicted_label': args.id2label[states[max_t].pred_label],
+                'predicted_evidence': \
+                    reduce(lambda seq1, seq2: seq1 + seq2,
+                           map(lambda sent: sent.tokens, states[max_t].candidate)) \
+                        if states[max_t].pred_label != args.label2id['NOT ENOUGH INFO'] else []
+            })
     
     predicted_list, strict_score, label_accuracy, precision, recall, f1 = calc_fever_score(results, args.dev_true_file)
     with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
@@ -240,15 +244,15 @@ def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSe
     logger.info(f'Results are saved in {os.path.join(load_dir, predicted_result.json)}')
 
 
-
 def run_dqn(args) -> None:
     env = Env(args.max_evi_size)
     agent = Agent(args)
     agent.to(args.device)
     if args.do_train:
         memory = ReplayMemory(args.capacity)
-        train_data = load_and_process_data(os.path.join(args.data_dir, 'train.jsonl'),
-                                           args.label2id, args.max_sent_length, agent.token)
+        train_data = load_and_process_data(args,
+                                           os.path.join(args.data_dir, 'train.jsonl'),
+                                           agent.token)
         epochs_trained = 0
         loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0
@@ -267,11 +271,12 @@ def run_dqn(args) -> None:
         
     if args.do_eval:
         assert args.checkpoint is not None
-        load_dir = os.path.join(args.output_dir, args.checkpoint)
-        agent.load(load_dir)
-        dev_data = load_and_process_data(os.path.join(args.data_dir, 'dev.jsonl'),
-                                         args.label2id, args.max_sent_length, agent.token)
-        evaluate(args, env, agent, load_dir, dev_data)
+        agent.load(args.checkpoint)
+        dev_data = load_and_process_data(args,
+                                         os.path.join(args.data_dir, 'dev.jsonl'),
+                                         agent.token,
+                                         is_eval=True)
+        evaluate(args, env, agent, args.checkpoint, dev_data)
 
 
 def main() -> None:

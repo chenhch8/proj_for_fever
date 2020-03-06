@@ -25,14 +25,16 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
         for line in tqdm(fr.readlines()):
             instance = json.loads(line.decode(ENCODING).strip('\r\n'))
             
-            evidence_set = []
-            for evidence in instance['evidence']:
-                process_evidence = []
-                for sent in evidence:
-                    if sent[2] is None: break
-                    process_evidence.append([sent[2], sent[3]])
-                if len(process_evidence) and process_evidence not in evidence_set:
-                    evidence_set.append(process_evidence)
+            if is_train:
+                evidence_set = []
+                for evidence in instance['evidence']:
+                    process_evidence = []
+                    for sent in evidence:
+                        if sent[2] is None: break
+                        process_evidence.append([sent[2], sent[3]])
+                    if len(process_evidence) and process_evidence not in evidence_set:
+                        evidence_set.append(process_evidence)
+            else: evidence_set = instance['evidence']
 
             instances.append({
                 'id': instance['id'],
@@ -79,6 +81,6 @@ def data_process(in_file: str, out_file: str, is_train: bool=True) -> None:
             }) + '\n').encode(ENCODING))
 
 if __name__ == '__main__':
-    data_process('./data/retrieved/train.wiki7.jsonl', './data/dqn/train.jsonl', is_train=True)
+    #data_process('./data/retrieved/train.wiki7.jsonl', './data/dqn/train.jsonl', is_train=True)
     data_process('./data/retrieved/dev.wiki7.jsonl', './data/dqn/dev.jsonl', is_train=False)
     #data_process('./data/retrieved/test.wiki7.jsonl', './data/dqn/test.jsonl', is_train=False)

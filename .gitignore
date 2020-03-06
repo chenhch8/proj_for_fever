@@ -2,4 +2,4 @@ code/data/*
 */**/__pycache__
 code/*.sh
 code/*output*/*
-code/runs/*
+code/.*
