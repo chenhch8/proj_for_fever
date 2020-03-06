@@ -131,14 +131,14 @@ class BertDQN(BaseDQN):
         assert length > 0
         all_tokens_a = [state.claim.tokens] * len(actions)
         all_tokens_b = [condidate + action.sentence.tokens[:length] for action in actions]
-        max_seq_len = max([len(tokens) for tokens in all_tokens_b]) + len(state.claim.tokens) + 3
+        #max_seq_len = max([len(tokens) for tokens in all_tokens_b]) + len(state.claim.tokens) + 3
 
         CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
         
-        interval = 4 * self.args.train_batch_size
+        interval = 10 * self.args.train_batch_size
         inputs = [convert_tokens_to_bert_inputs(all_tokens_a[i:i + interval],
                                                 all_tokens_b[i:i + interval],
-                                                max_seq_len, CLS, SEP) \
+                                                self.max_seq_length, CLS, SEP) \
                   for i in range(0, len(all_tokens_b), interval)]
 
         return inputs
@@ -156,12 +156,12 @@ class BertDQN(BaseDQN):
             tokens_b = condidate + action.sentence.tokens
             all_tokens_a.append(tokens_a)
             all_tokens_b.append(tokens_b)
-        max_seq_len = min(max([len(tokens_a) + len(tokens_b) + 3 \
-                                for tokens_a, tokens_b in zip(all_tokens_a, all_tokens_b)]),
-                          self.max_seq_length)
+        #max_seq_len = min(max([len(tokens_a) + len(tokens_b) + 3 \
+        #                        for tokens_a, tokens_b in zip(all_tokens_a, all_tokens_b)]),
+        #                  self.max_seq_length)
         
         CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
         
         return convert_tokens_to_bert_inputs(all_tokens_a, all_tokens_b,
-                                             max_seq_len, CLS, SEP, self.device)
+                                             self.max_seq_length, CLS, SEP, self.device)
 
