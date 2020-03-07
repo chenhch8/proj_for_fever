@@ -12,30 +12,62 @@ import pdb
 from .base_dqn import BaseDQN
 from data.structure import Action, State, Transition
 
-from transformers import (WEIGHTS_NAME, BertConfig,
-                                  BertForSequenceClassification, BertTokenizer,
-                                  RobertaConfig,
-                                  RobertaForSequenceClassification,
-                                  RobertaTokenizer,
-                                  XLMConfig, XLMForSequenceClassification,
-                                  XLMTokenizer, XLNetConfig,
-                                  XLNetForSequenceClassification,
-                                  XLNetTokenizer,
-                                  DistilBertConfig,
-                                  DistilBertForSequenceClassification,
-                                  DistilBertTokenizer)
+from transformers import (
+    WEIGHTS_NAME,
+    AdamW,
+    AlbertConfig,
+    AlbertForSequenceClassification,
+    AlbertTokenizer,
+    BertConfig,
+    BertForSequenceClassification,
+    BertTokenizer,
+    DistilBertConfig,
+    DistilBertForSequenceClassification,
+    DistilBertTokenizer,
+    FlaubertConfig,
+    FlaubertForSequenceClassification,
+    FlaubertTokenizer,
+    RobertaConfig,
+    RobertaForSequenceClassification,
+    RobertaTokenizer,
+    XLMConfig,
+    XLMForSequenceClassification,
+    XLMRobertaConfig,
+    XLMRobertaForSequenceClassification,
+    XLMRobertaTokenizer,
+    XLMTokenizer,
+    XLNetConfig,
+    XLNetForSequenceClassification,
+    XLNetTokenizer,
+    get_linear_schedule_with_warmup,
+)
 
-from transformers import AdamW, WarmupLinearSchedule
-
-ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig, XLMConfig, 
-                                                                                RobertaConfig, DistilBertConfig)), ())
+ALL_MODELS = sum(
+    (
+        tuple(conf.pretrained_config_archive_map.keys())
+        for conf in (
+            BertConfig,
+            XLNetConfig,
+            XLMConfig,
+            RobertaConfig,
+            DistilBertConfig,
+            AlbertConfig,
+            XLMRobertaConfig,
+            FlaubertConfig,
+        )
+    ),
+    (),
+)
 
 MODEL_CLASSES = {
-    'bert': (BertConfig, BertForSequenceClassification, BertTokenizer),
-    'xlnet': (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
-    'xlm': (XLMConfig, XLMForSequenceClassification, XLMTokenizer),
-    'roberta': (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
-    'distilbert': (DistilBertConfig, DistilBertForSequenceClassification, DistilBertTokenizer)
+    "bert": (BertConfig, BertForSequenceClassification, BertTokenizer),
+    "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
+    "xlm": (XLMConfig, XLMForSequenceClassification, XLMTokenizer),
+    "roberta": (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
+    "distilbert": (DistilBertConfig, DistilBertForSequenceClassification, DistilBertTokenizer),
+    "albert": (AlbertConfig, AlbertForSequenceClassification, AlbertTokenizer),
+    "xlmroberta": (XLMRobertaConfig, XLMRobertaForSequenceClassification, XLMRobertaTokenizer),
+    "flaubert": (FlaubertConfig, FlaubertForSequenceClassification, FlaubertTokenizer),
 }
 
 
@@ -107,15 +139,21 @@ class BertDQN(BaseDQN):
 
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
-
+        
         # Prepare optimizer and schedule (linear warmup and decay)
-        no_decay = ['bias', 'LayerNorm.weight']
+        no_decay = ["bias", "LayerNorm.weight"]
         optimizer_grouped_parameters = [
-            {'params': [p for n, p in self.q_net.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
-            {'params': [p for n, p in self.q_net.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-            ]
+            {
+                "params": [p for n, p in self.q_net.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": args.weight_decay,
+            },
+            {"params": [p for n, p in self.q_net.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+        ]
+
         self.optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-        #self.scheduler = WarmupLinearSchedule(self.optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
+        #scheduler = get_linear_schedule_with_warmup(
+        #    self.optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
+        #)
 
 
     def token(self, text_sequence: str) -> List[int]:
