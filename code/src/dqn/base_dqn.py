@@ -140,7 +140,7 @@ class BaseDQN:
             inputs = self.convert_to_inputs_for_select_action(state, actions)
             q_values = [net(
                 **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))
-            )[0] for clip_inputs in inputs]
+            )[0].cpu() for clip_inputs in inputs]
             q_values = torch.cat(q_values, dim=0)
         # epsilon greedy
         sample = random.random()

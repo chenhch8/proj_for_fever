@@ -135,7 +135,7 @@ class BertDQN(BaseDQN):
 
         CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
         
-        interval = 10 * self.args.train_batch_size
+        interval = 5 * self.args.train_batch_size
         inputs = [convert_tokens_to_bert_inputs(all_tokens_a[i:i + interval],
                                                 all_tokens_b[i:i + interval],
                                                 max_seq_len, CLS, SEP) \
