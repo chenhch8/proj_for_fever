@@ -163,13 +163,19 @@ class BertDQN(BaseDQN):
     def convert_to_inputs_for_select_action(self, state: State, actions: List[Action]) -> List[dict]:
         condidate = reduce(lambda seq1, seq2: seq1 + seq2,
                            map(lambda sent: sent.tokens, state.candidate)) if len(state.candidate) else []
-        length = self.max_seq_length - 3 - len(state.claim.tokens) - len(condidate)
-        if length <= 0:
-            self.logger.info(state.candidate)
-            self.logger.info(f'claim: {len(state.claim.tokens)}; condidate: {len(condidate)}; length: {length}')
-        assert length > 0
-        all_tokens_a = [state.claim.tokens] * len(actions)
-        all_tokens_b = [condidate + action.sentence.tokens[:length] for action in actions]
+        if len(actions):
+            length = self.max_seq_length - 3 - len(state.claim.tokens) - len(condidate)
+            if length <= 0:
+                self.logger.info(state.candidate)
+                self.logger.info(f'claim: {len(state.claim.tokens)}; condidate: {len(condidate)}; length: {length}')
+            assert length > 0
+            all_tokens_a = [state.claim.tokens] * len(actions)
+            all_tokens_b = [condidate + action.sentence.tokens[:length] for action in actions]
+        else:
+            assert len(condidate)
+            all_tokens_a = [state.claim.tokens]
+            all_tokens_b = [condidate]
+
         max_seq_len = max([len(tokens) for tokens in all_tokens_b]) + len(state.claim.tokens) + 3
 
         CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
@@ -193,7 +199,12 @@ class BertDQN(BaseDQN):
             condidate = reduce(lambda seq1, seq2: seq1 + seq2,
                                map(lambda sent: sent.tokens, state.candidate)) \
                             if len(state.candidate) else []
-            tokens_b = condidate + action.sentence.tokens
+            # action=None: state_now is terminal state
+            # action!=None & action.sentence=None: state_next is not terminal but has not actions
+            if action is not None and action.sentence is not None:
+                tokens_b = condidate + action.sentence.tokens
+            else:
+                tokens_b = condidate
             all_tokens_a.append(tokens_a)
             all_tokens_b.append(tokens_b)
         max_seq_len = min(max([len(tokens_a) + len(tokens_b) + 3 \

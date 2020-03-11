@@ -159,9 +159,7 @@ def train(args,
                 state_next, reward, done = env.step(state, action)
                 next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
                         if not done else []
-                if len(next_actions) == 0 and not done:
-                    state_next = None
-                    done = True
+                if done: action = None
                 memory.push(Transition(state=state,
                                        action=action,
                                        next_state=state_next,
@@ -184,7 +182,7 @@ def train(args,
                     t_steps += 1
                     epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
                     epoch_iterator.refresh()
-                if done: break
+                if done or len(actions) == 0: break
             if i and i % args.target_update == 0:
                 agent.soft_update_of_target_network(args.tau)
             

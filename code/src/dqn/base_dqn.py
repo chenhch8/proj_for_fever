@@ -105,7 +105,8 @@ class BaseDQN:
         del rewards
 
         # state_action value of q_net
-        labels = torch.tensor([action.label for action in batch.action],
+        labels = torch.tensor([action.label if action is not None else state.pred_label \
+                                for state, action in zip(batch.state, batch.action)],
                                dtype=torch.long, device=self.device).view(-1, 1)
         state_action_values = self.q_net(
             **self.convert_to_inputs_for_update(batch.state, batch.action)
@@ -163,7 +164,10 @@ class BaseDQN:
             #pdb.set_trace()
             sent_id = random.randint(0, len(actions) - 1)
             label_id = random.randint(0, self.args.num_labels - 1)
-        action = Action(sentence=actions[sent_id].sentence, label=label_id)
+        if len(actions):
+            action = Action(sentence=actions[sent_id].sentence, label=label_id)
+        else:
+            action = Action(sentence=None, label=label_id)
         q = q_values[sent_id, label_id].item()
         return action, q
 
