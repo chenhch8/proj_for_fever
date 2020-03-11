@@ -23,7 +23,8 @@ class ReplayMemory:
         self.length = min(self.length + 1, self.capacity)
 
     def sample(self, batch_size: int) -> List[Transition]:
-        return random.sample(self.memory, min(len(self.memory), batch_size))
+        return random.sample(self.memory[:self.length],
+                             min(self.length, batch_size))
 
     def __len__(self) -> int:
         return self.length

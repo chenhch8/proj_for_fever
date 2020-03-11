@@ -63,6 +63,7 @@ class BaseDQN:
     def update(self, transitions: List[Transition], isweights: List[float]=None) -> float:
         self.q_net.train()
         self.t_net.eval()
+        
         batch = Transition(*zip(*transitions))
         
         # max state value of t_net
