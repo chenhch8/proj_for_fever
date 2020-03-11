@@ -106,7 +106,7 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--eps_decay', default=1000, type=float)
 
     parser.add_argument('--target_update', default=10, type=int)
-    parser.add_argument('--tau', default=0.95, type=int)
+    parser.add_argument('--tau', default=1., type=float)
 
 
 def set_bert_args(parser) -> None:
