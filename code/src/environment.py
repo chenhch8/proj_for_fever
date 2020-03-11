@@ -41,7 +41,7 @@ class DuEnv(BaseEnv):
             return self.score(state_now) - self.score(state_next)
     
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = len(state.candidate) == self.K
+        done = len(state.candidate) >= self.K
         state_next = State(claim=state.claim,
                            label=state.label,
                            evidence_set=state.evidence_set,

@@ -27,14 +27,13 @@ def normalize(text: str) -> str:
 def process_data(instances):
     new_instances = []
     for instance in tqdm(instances):
-        evidence_set = set(map(lambda evidence: tuple(map(lambda sent: (sent[2], sent[3]),
-                                                          evidence)),
-                               instance['evidence'])) if instance['label'] != 'NOT ENOUGH INFO' else []
-        pred_evidence = tuple(map(lambda sent: (sent[0], sent[1]), instance['predicted_evidence']))
-        
-        titles = [sent[0] for evidence in evidence_set for sent in evidence] + \
-                 [sent[0] for sent in pred_evidence]
-        titles = set(titles)
+        if instance['label'] != 'NOT ENOUGH INFO':
+            evidence_set = set(map(lambda evidence: tuple(map(lambda sent: (sent[2], sent[3]),
+                                                              evidence)),
+                                   instance['evidence']))
+        else:
+            evidence_set = set(map(lambda sent: ((sent[0], sent[1]),), instance['predicted_evidence']))
+        titles = set([sent[0] for evidence in evidence_set for sent in evidence])
         
         documents = defaultdict(dict)
         for title in titles:
@@ -58,22 +57,15 @@ def process_data(instances):
         documents = dict(documents)
 
         for evidence in evidence_set:
-            evi_str = ' '.join([documents[title][line_num] for title, line_num in evidence[:5]])
+            evi_str = ' '.join([documents[title][line_num] for title, line_num in evidence[:5] \
+                               if title in documents and line_num in documents[title]])
+            if evi_str == '': continue
             label = instance['label'] if len(evidence) <= 5 else 'NOT ENOUGH INFO'
             new_instances.append({
                 'id': str(instance['id']),
                 'claim': instance['claim'],
                 'evidence': evi_str,
                 'label': label
-            })
-        for title, line_num in pred_evidence:
-            if ((title, line_num),) in evidence_set or title not in documents: continue
-            if line_num not in documents[title]: continue
-            new_instances.append({
-                'id': str(instance['id']),
-                'claim': instance['claim'],
-                'evidence': documents[title][line_num],
-                'label': 'NOT ENOUGH INFO'
             })
     return new_instances
 

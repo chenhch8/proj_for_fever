@@ -140,15 +140,15 @@ class BaseDQN:
             inputs = self.convert_to_inputs_for_select_action(state, actions)
             q_values = [net(
                 **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))
-            )[0].cpu() for clip_inputs in inputs]
-            q_values = torch.cat(q_values, dim=0)
+            )[0] for clip_inputs in inputs]
+            q_values = torch.cat(q_values, dim=0).cpu().data
         # epsilon greedy
         sample = random.random()
         eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
             math.exp(-1. * self.steps_done / self.eps_decay)
         self.steps_done += 1 if not is_eval else 0
         if sample > eps_threshold or is_eval:
-            max_action = q_values.argmax().cpu().data.item()
+            max_action = q_values.argmax()
             sent_id = max_action // self.args.num_labels
             label_id = max_action % self.args.num_labels
         else:
@@ -156,7 +156,7 @@ class BaseDQN:
             sent_id = random.randint(0, len(actions) - 1)
             label_id = random.randint(0, self.args.num_labels - 1)
         action = Action(sentence=actions[sent_id].sentence, label=label_id)
-        q = q_values[sent_id, label_id].cpu().data.item()
+        q = q_values[sent_id, label_id].item()
         return action, q
 
 

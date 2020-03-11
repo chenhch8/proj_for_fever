@@ -165,6 +165,7 @@ class BertDQN(BaseDQN):
                            map(lambda sent: sent.tokens, state.candidate)) if len(state.candidate) else []
         length = self.max_seq_length - 3 - len(state.claim.tokens) - len(condidate)
         if length <= 0:
+            self.logger.info(state.candidate)
             self.logger.info(f'claim: {len(state.claim.tokens)}; condidate: {len(condidate)}; length: {length}')
         assert length > 0
         all_tokens_a = [state.claim.tokens] * len(actions)

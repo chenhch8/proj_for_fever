@@ -11,6 +11,7 @@ import random
 from typing import List, Tuple
 from tqdm import tqdm, trange
 from functools import reduce
+from collections import defaultdict
 #from multiprocessing import cpu_count, Pool
 
 from dqn.bert_dqn import BertDQN
@@ -100,9 +101,21 @@ def calc_fever_score(predicted_list: List[dict], true_file: str) \
                     'predicted_evidence': []
                 })
     assert len(predicted_list) == 19998
+    
+    predicted_list_per_label = defaultdict(list)
+    for item in predicted_list:
+        predicted_list_per_label[item['label']].append(item)
+    predicted_list_per_label = dict(predicted_list_per_label)
+
+    scores = {}
     strict_score, label_accuracy, precision, recall, f1 = fever_score(predicted_list)
-    logger.info(f'FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
-    return predicted_list, strict_score, label_accuracy, precision, recall, f1
+    scores['dev'] = (strict_score, label_accuracy, precision, recall, f1)
+    logger.info(f'[Dev] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
+    for label, item in predicted_list_per_label.items():
+        strict_score, label_accuracy, precision, recall, f1 = fever_score(item)
+        scores[label] = (strict_score, label_accuracy, precision, recall, f1)
+        logger.info(f'[{label}] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
+    return predicted_list, scores
 
 
 def train(args,
@@ -163,8 +176,7 @@ def train(args,
                     t_steps += 1
                     epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
                     epoch_iterator.refresh()
-                if done:
-                    break
+                if done: break
             if i and i % args.target_update == 0:
                 agent.soft_update_of_target_network(args.tau)
             
@@ -192,7 +204,6 @@ def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSe
                                          agent.token)
     results = []
     logger.info('Evaluating')
-    #pdb.set_trace()
     with torch.no_grad():
         for claim, label_id, evidence_set, sentences in tqdm(dev_data):
             state = State(claim=claim,
@@ -224,6 +235,8 @@ def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSe
                 if max_score < score_t:
                     max_score = score_t
                     max_t = t
+            #if states[max_t].pred_label != 2:
+            #    pdb.set_trace()
             results.append({
                 'id': claim.id,
                 'label': args.id2label[states[max_t].label],
@@ -231,17 +244,20 @@ def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSe
                 'predicted_label': args.id2label[states[max_t].pred_label],
                 'predicted_evidence': \
                     reduce(lambda seq1, seq2: seq1 + seq2,
-                           map(lambda sent: sent.tokens, states[max_t].candidate)) \
-                        if states[max_t].pred_label != args.label2id['NOT ENOUGH INFO'] else []
+                           map(lambda sent: [list(sent.id)], states[max_t].candidate)) \
+                        if len(states[max_t].candidate) else []
             })
+
+    with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
+        json.dump(results, fw)
     
-    predicted_list, strict_score, label_accuracy, precision, recall, f1 = calc_fever_score(results, args.dev_true_file)
+    predicted_list, scores = calc_fever_score(results, args.dev_true_file)
     with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
         json.dump({
-            'score': (strict_score, label_accuracy, precision, recall, f1),
+            'scores': scores,
             'predicted_list': predicted_list
         }, fw)
-    logger.info(f'Results are saved in {os.path.join(load_dir, predicted_result.json)}')
+    logger.info(f'Results are saved in {os.path.join(save_dir, "predicted_result.json")}')
 
 
 def run_dqn(args) -> None:

@@ -19,6 +19,11 @@ def set_com_args(parser) -> None:
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
+        "--dev_true_file",
+        default="data/fever/shared_task_dev.jsonl",
+        type=str,
+    )
+    parser.add_argument(
         "--max_evi_size",
         default=5,
         type=int,
