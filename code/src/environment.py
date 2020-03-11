@@ -12,6 +12,14 @@ class BaseEnv:
         sents2 = set(map(lambda sent: tuple(sent.id), e2))
         return (len(sents1 & sents2) + 1.0) / (len(sents1 | sents2) + 1.0)
 
+    @classmethod
+    def new_state(cls, state: State, action: Action) -> State:
+        return State(claim=state.claim,
+                     label=state.label,
+                     evidence_set=state.evidence_set,
+                     candidate=state.candidate + [action.sentence],
+                     pred_label=action.label)
+
     def score(self, state: State) -> float:
         return NotImplementedError()
 
@@ -42,10 +50,6 @@ class DuEnv(BaseEnv):
     
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
         done = len(state.candidate) >= self.K
-        state_next = State(claim=state.claim,
-                           label=state.label,
-                           evidence_set=state.evidence_set,
-                           candidate=state.candidate + [action.sentence],
-                           pred_label=action.label) if not done else None
+        state_next = BaseEnv.new_state(state, action) if not done else None
         return state_next, self.reward(state, state_next), done
 

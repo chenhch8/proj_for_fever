@@ -97,6 +97,7 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
     # replay memory
     parser.add_argument('--capacity', default=200000, type=int)
+    parser.add_argument('--prioritized_replay', action='store_true')
     # discount factor
     parser.add_argument('--eps_gamma', default=0.95, type=float)
     # epsilon greedy

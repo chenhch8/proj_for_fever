@@ -60,7 +60,7 @@ class BaseDQN:
             )
 
 
-    def update(self, transitions: List[Transition]) -> float:
+    def update(self, transitions: List[Transition], isweights: List[float]=None) -> float:
         self.q_net.train()
         self.t_net.eval()
         batch = Transition(*zip(*transitions))
@@ -113,11 +113,18 @@ class BaseDQN:
         #print(state_action_values.size())
         
         # compute Huber loss
-        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
-        if self.args.n_gpu > 1:
-            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
+                                reduction='none')
+        if isweights is not None:
+            isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
+            assert loss.size() == isweights.size()
+            mloss = (loss * isweights).mean()
+        else:
+            mloss = loss.mean()
+        #if self.args.n_gpu > 1:
+        #    loss = loss.mean()  # mean() to average on multi-gpu parallel training
         # optimize model
-        loss.backward()
+        mloss.backward()
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),
                                        self.args.max_grad_norm)
         self.optimizer.step()
@@ -125,7 +132,7 @@ class BaseDQN:
             self.scheduler.step()
         self.q_net.zero_grad()
 
-        return loss.cpu().data.item()
+        return loss.detach().cpu().data
 
 
     def select_action(self, state: State,

@@ -16,7 +16,7 @@ from collections import defaultdict
 
 from dqn.bert_dqn import BertDQN
 from environment import DuEnv
-from replay_memory import ReplayMemory
+from replay_memory import ReplayMemory, PrioritizedReplayMemory
 from data.structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
 
@@ -119,13 +119,14 @@ def calc_fever_score(predicted_list: List[dict], true_file: str) \
 
 
 def train(args,
-          env: Env,
           agent: Agent,
-          memory: ReplayMemory,
           train_data: DataSet,
           epochs_trained: int=0,
           loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0) -> None:
+    env = Env(args.max_evi_size)
+    memory = PrioritizedReplayMemory(args.capacity) if args.prioritized_replay else ReplayMemory(args.capacity) 
+    
     train_ids = list(range(len(train_data)))
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
     for epoch in train_iterator:
@@ -170,8 +171,15 @@ def train(args,
                 actions = next_actions
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
-                    batch = memory.sample(args.train_batch_size)
-                    loss = agent.update(batch)
+                    if args.prioritized_replay:
+                        tree_idx, isweights, batch = memory.sample(args.train_batch_size)
+                    else:
+                        batch = memory.sample(args.train_batch_size)
+                        isweights = None
+                    loss = agent.update(batch, isweights)
+                    if args.prioritized_replay:
+                        memory.batch_update_sumtree(tree_idx, loss)
+                    loss = loss.mean().item()
                     t_loss += loss
                     t_steps += 1
                     epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
@@ -196,7 +204,7 @@ def train(args,
     train_iterator.close()
 
 
-def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSet=None):
+def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
     agent.eval()
     if dev_data is None:
         dev_data = load_and_process_data(args,
@@ -215,11 +223,7 @@ def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSe
             q_values, states = [], []
             for _ in range(args.max_evi_size):
                 action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
-                state_next = State(claim=state.claim,
-                                   label=state.label,
-                                   evidence_set=state.evidence_set,
-                                   candidate=state.candidate + [action.sentence],
-                                   pred_label=action.label)
+                state_next = DuEnv.new_state(state, action),
                 next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions))
                 q_values.append(q_value)
                 states.append(state)
@@ -261,11 +265,9 @@ def evaluate(args: dict, env: Env, agent: Agent, save_dir: str, dev_data: DataSe
 
 
 def run_dqn(args) -> None:
-    env = Env(args.max_evi_size)
     agent = Agent(args)
     agent.to(args.device)
     if args.do_train:
-        memory = ReplayMemory(args.capacity)
         train_data = load_and_process_data(args,
                                            os.path.join(args.data_dir, 'train.jsonl'),
                                            agent.token)
@@ -280,7 +282,7 @@ def run_dqn(args) -> None:
             agent.load(args.checkpoint)
             with open(os.path.join(args.checkpoint, 'memory.pk'), 'rb') as fr:
                 memory = pickle.load(fr)
-        train(args, env, agent, memory, train_data,
+        train(args, agent, train_data,
               epochs_trained,
               loss_trained_in_current_epoch,
               steps_trained_in_current_epoch)
