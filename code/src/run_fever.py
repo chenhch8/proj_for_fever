@@ -178,7 +178,7 @@ def train(args,
                         isweights = None
                     loss = agent.update(batch, isweights)
                     if args.prioritized_replay:
-                        memory.batch_update_sumtree(tree_idx, loss)
+                        memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()
                     t_loss += loss
                     t_steps += 1

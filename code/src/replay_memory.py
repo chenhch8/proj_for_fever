@@ -1,14 +1,15 @@
 #!/usr/bin/python3
 # coding: utf-8
 import random
-from typing import List
+import numpy as np
+from typing import List, Tuple
 from data.structure import Transition
 
 
 class ReplayMemory:
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
-        self.memory = [0.] * capacity
+        self.memory = [None] * capacity
         self.position = 0
         self.length = 0
 
@@ -57,7 +58,7 @@ class PrioritizedReplayMemory(ReplayMemory):
         self.update_sumtree(idx, priority, is_error=False)
 
     def sample(self, batch_size: int) -> Tuple[List[int], List[float], List[Transition]]:
-        idxs, priorities, batch = [], [], []
+        idxs, isweights, batch = [], [], []
         segment = self.tree[0] / batch_size
         
         self.beta = min(1., self.beta + self.beta_increment_per_sampling)
@@ -68,13 +69,12 @@ class PrioritizedReplayMemory(ReplayMemory):
 
             s = random.uniform(a, b)
             idx, priority = self.get_from_sumtree(s)
-            priorities.append(priority)
+            isweights.append(priority / self.tree[0])
             batch.append(self.memory[idx + 1 - self.capacity])
             idxs.append(idx)
 
-        isweights = np.pow(np.asarray(priorities) / self.tree[0] * self.length,
-                           -self.beta)
-        isweights /= isweights.max()
+        isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
+                             -self.beta).tolist()
 
         return idxs, isweights, batch
 
