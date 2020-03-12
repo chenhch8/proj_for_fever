@@ -97,7 +97,6 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
     # replay memory
     parser.add_argument('--capacity', default=200000, type=int)
-    parser.add_argument('--prioritized_replay', action='store_true')
     # discount factor
     parser.add_argument('--eps_gamma', default=0.95, type=float)
     # epsilon greedy
@@ -108,6 +107,8 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--target_update', default=10, type=int)
     parser.add_argument('--tau', default=1., type=float)
 
+    parser.add_argument('--env', default='DuEnv', choices=['DuEnv', 'ChenEnv'])
+    parser.add_argument('--mem', default='priority', choices=['random', 'priority'])
 
 def set_bert_args(parser) -> None:
     from dqn.bert_dqn import MODEL_CLASSES

@@ -26,7 +26,8 @@ import pdb
 logger = logging.getLogger(__name__)
 
 Agent = BertDQN
-Env = ChenEnv
+Env = {'DuEnv': DuEnv, 'ChenEnv': ChenEnv}
+Memory = {'random': ReplayMemory, 'priority': PrioritizedReplayMemory}
 
 DataSet = List[Tuple[Claim, int, Evidence, List[Sentence]]]
 
@@ -124,8 +125,8 @@ def train(args,
           epochs_trained: int=0,
           loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0) -> None:
-    env = Env(args.max_evi_size)
-    memory = PrioritizedReplayMemory(args.capacity) if args.prioritized_replay else ReplayMemory(args.capacity) 
+    env = Env[args.env](args.max_evi_size)
+    memory = Memory[args.mem](args.capacity) 
     
     train_ids = list(range(len(train_data)))
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
