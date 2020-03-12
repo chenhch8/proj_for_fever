@@ -221,7 +221,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
             q_values, states = [], []
             for _ in range(args.max_evi_size):
                 action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
-                state_next = DuEnv.new_state(state, action),
+                state_next = DuEnv.new_state(state, action)
                 next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions))
                 q_values.append(q_value)
                 states.append(state)
@@ -292,7 +292,7 @@ def run_dqn(args) -> None:
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token,
                                          is_eval=True)
-        evaluate(args, env, agent, args.checkpoint, dev_data)
+        evaluate(args, agent, args.checkpoint, dev_data)
 
 
 def main() -> None:
