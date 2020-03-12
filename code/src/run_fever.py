@@ -15,7 +15,7 @@ from collections import defaultdict
 #from multiprocessing import cpu_count, Pool
 
 from dqn.bert_dqn import BertDQN
-from environment import DuEnv, ChenEnv
+from environment import BaseEnv, DuEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory
 from data.structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
@@ -170,13 +170,13 @@ def train(args,
                 actions = next_actions
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
-                    if args.prioritized_replay:
+                    if args.mem == 'priority':
                         tree_idx, isweights, batch = memory.sample(args.train_batch_size)
                     else:
                         batch = memory.sample(args.train_batch_size)
                         isweights = None
                     loss = agent.update(batch, isweights)
-                    if args.prioritized_replay:
+                    if args.mem == 'priority':
                         memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()
                     t_loss += loss
@@ -222,7 +222,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
             q_values, states = [], []
             for _ in range(args.max_evi_size):
                 action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
-                state_next = DuEnv.new_state(state, action)
+                state_next = BaseEnv.new_state(state, action)
                 next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions))
                 q_values.append(q_value)
                 states.append(state)
