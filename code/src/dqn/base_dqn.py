@@ -133,6 +133,8 @@ class BaseDQN:
         if self.scheduler is not None:
             self.scheduler.step()
         self.q_net.zero_grad()
+        
+        self.steps_done += 1
 
         return loss.detach().cpu().data
 
@@ -155,7 +157,6 @@ class BaseDQN:
         sample = random.random()
         eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
             math.exp(-1. * self.steps_done / self.eps_decay)
-        self.steps_done += 1 if not is_eval else 0
         if sample > eps_threshold or is_eval:
             max_action = q_values.argmax().item()
             sent_id = max_action // self.args.num_labels
