@@ -229,15 +229,18 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                 state = state_next
                 actions = next_actions
                 if len(next_actions) == 0: break
-            
-            score_t = q_values[-1]
-            max_score = score_t
-            max_t = len(q_values) - 1
-            for t in range(len(states) - 2, -1, -1):
-                score_t = q_values[t] - args.eps_gamma * q_values[t + 1] + score_t
-                if max_score < score_t:
-                    max_score = score_t
-                    max_t = t
+
+            if args.env == 'DuEnv':
+                score_t = q_values[-1]
+                max_score = score_t
+                max_t = len(q_values) - 1
+                for t in range(len(states) - 2, -1, -1):
+                    score_t = q_values[t] - args.eps_gamma * q_values[t + 1] + score_t
+                    if max_score < score_t:
+                        max_score = score_t
+                        max_t = t
+            else:
+                max_t = np.asarray(q_values).argmax()
             #if states[max_t].pred_label != 2:
             #    pdb.set_trace()
             results.append({
