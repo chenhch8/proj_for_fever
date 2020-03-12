@@ -162,11 +162,12 @@ class BaseDQN:
             label_id = max_action % self.args.num_labels
         else:
             #pdb.set_trace()
-            sent_id = random.randint(0, len(actions) - 1)
+            sent_id = random.randint(0, max(0, len(actions) - 1))
             label_id = random.randint(0, self.args.num_labels - 1)
         if len(actions):
             action = Action(sentence=actions[sent_id].sentence, label=label_id)
         else:
+            assert q_values.size(0) == 1 and sent_id == 0
             action = Action(sentence=None, label=label_id)
         q = q_values[sent_id, label_id].item()
         return action, q
