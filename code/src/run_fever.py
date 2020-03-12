@@ -15,7 +15,7 @@ from collections import defaultdict
 #from multiprocessing import cpu_count, Pool
 
 from dqn.bert_dqn import BertDQN
-from environment import DuEnv
+from environment import DuEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory
 from data.structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
@@ -26,7 +26,7 @@ import pdb
 logger = logging.getLogger(__name__)
 
 Agent = BertDQN
-Env = DuEnv
+Env = ChenEnv
 
 DataSet = List[Tuple[Claim, int, Evidence, List[Sentence]]]
 
