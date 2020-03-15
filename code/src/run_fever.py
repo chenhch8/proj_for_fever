@@ -213,6 +213,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
     logger.info('Evaluating')
     with torch.no_grad():
         for claim, label_id, evidence_set, sentences in tqdm(dev_data):
+            #pdb.set_trace()
             state = State(claim=claim,
                           label=label_id,
                           evidence_set=evidence_set,
@@ -225,7 +226,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                 state_next = BaseEnv.new_state(state, action)
                 next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions))
                 q_values.append(q_value)
-                states.append(state)
+                states.append(state_next)
                 state = state_next
                 actions = next_actions
                 if len(next_actions) == 0: break
@@ -240,7 +241,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                         max_score = score_t
                         max_t = t
             else:
-                max_t = np.asarray(q_values).argmax()
+                max_t = -1
             #if states[max_t].pred_label != 2:
             #    pdb.set_trace()
             results.append({
