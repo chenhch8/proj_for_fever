@@ -139,6 +139,7 @@ def train(args,
                               desc='[Train]Loss:---------',
                               disable=args.local_rank not in [-1, 0])
         t_loss, t_steps = loss_trained_in_current_epoch, steps_trained_in_current_epoch
+        t_losses, losses = [], []
         for i, idx in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 if steps_trained_in_current_epoch == t_steps:
@@ -181,6 +182,7 @@ def train(args,
                     loss = loss.mean().item()
                     t_loss += loss
                     t_steps += 1
+                    losses.append(loss)
                     epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
                     epoch_iterator.refresh()
                 if done or len(actions) == 0: break
@@ -192,6 +194,10 @@ def train(args,
                 agent.save(save_dir)
                 with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                     pickle.dump(memory, fw)
+                with open(os.path.join(save_dir, 'loss.txt'), 'w') as fw:
+                    fw.write('\n'.join(list(map(str, losses))))
+                t_losses.extend(losses)
+                losses = []
 
         epoch_iterator.close()
         
@@ -200,6 +206,8 @@ def train(args,
             agent.save(save_dir)
             with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                 pickle.dump(memory, fw)
+            with open(os.path.join(save_dir, 'loss.txt'), 'w') as fw:
+                fw.write('\n'.join(list(map(str, t_losses))))
     train_iterator.close()
 
 
