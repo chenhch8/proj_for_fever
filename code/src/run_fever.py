@@ -142,12 +142,7 @@ def train(args,
         t_losses, losses = [], []
         for i, idx in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
-                if steps_trained_in_current_epoch == t_steps:
-                    print('\nRestoring:', end='')
                 steps_trained_in_current_epoch -= 1
-                present = (t_steps - steps_trained_in_current_epoch) / float(t_steps)
-                if present in [float(i) / 10. for i in range(1, 11)]:
-                    print(f'{int(present * 100)}%', end='->' if steps_trained_in_current_epoch else '\n')
                 continue
             claim, label_id, evidence_set, sentences = train_data[idx]
             state = State(claim=claim,
