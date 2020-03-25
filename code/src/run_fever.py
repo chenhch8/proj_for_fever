@@ -161,7 +161,7 @@ def train(args,
                 batch_actions.append(
                     [Action(sentence=sent, label='F/T/N') for sent in sentences]
                 )
-
+            pdb.set_trace()
             while True:
                 batch_selected_action, _ = agent.select_action(batch_state,
                                                                batch_actions,

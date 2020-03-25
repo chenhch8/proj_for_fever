@@ -165,16 +165,16 @@ class BertDQN(BaseDQN):
         batch_tokens_a, batch_tokens_b = [], []
         max_seq_len = 0
         for state, actions in zip(batch_state, batch_actions):
-            condidate = reduce(lambda seq1, seq2: seq1 + seq2,
+            candidate = reduce(lambda seq1, seq2: seq1 + seq2,
                                [sent.tokens for sent in state.candidate]) if len(state.candidate) else []
-            length = self.max_seq_length - 3 - len(state.claim.tokens) - len(condidate)
+            length = self.max_seq_length - 3 - len(state.claim.tokens) - len(candidate)
             if length <= 0:
                 self.logger.info(state.candidate)
-                self.logger.info(f'claim: {len(state.claim.tokens)}; condidate: {len(condidate)}; length: {length}')
+                self.logger.info(f'claim: {len(state.claim.tokens)}; candidate: {len(candidate)}; length: {length}')
             assert length > 0
             all_tokens_a = [state.claim.tokens] * len(actions)
-            all_tokens_b = [condidate + action.sentence.tokens[:length] \
-                              if action.sentence != None else condidate \
+            all_tokens_b = [candidate + action.sentence.tokens[:length] \
+                              if action.sentence != None else candidate.copy() \
                                 for action in actions]
             
             batch_tokens_a.extend(all_tokens_a)
@@ -190,7 +190,6 @@ class BertDQN(BaseDQN):
                                                batch_tokens_b,
                                                max_seq_len, CLS, SEP)
                                                 #self.max_seq_length, CLS, SEP)
-
         return inputs
     
 
@@ -199,12 +198,12 @@ class BertDQN(BaseDQN):
         all_tokens_a, all_tokens_b = [], []
         for state, action in zip(states, actions):
             tokens_a = state.claim.tokens
-            condidate = reduce(lambda seq1, seq2: seq1 + seq2,
+            candidate = reduce(lambda seq1, seq2: seq1 + seq2,
                                [sent.tokens for sent in state.candidate]) \
                             if len(state.candidate) else []
             # action=None: state is terminal state
             # action.sentence=None: state is non terminal state but has no action sentence
-            tokens_b = condidate
+            tokens_b = candidate.copy()
             if action is not None and action.sentence is not None:
                 tokens_b += action.sentence.tokens
             assert len(tokens_b)
