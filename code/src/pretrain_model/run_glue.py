@@ -22,6 +22,7 @@ import glob
 import logging
 import os
 import random
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -114,6 +115,7 @@ mnli_label_map = {
         'neutral': 'NOT ENOUGH INFO'
     
 }
+label_list = None
 
 def set_seed(args):
     random.seed(args.seed)
@@ -329,15 +331,27 @@ def evaluate(args, model, tokenizer, prefix=""):
             preds = np.argmax(preds, axis=1)
         elif args.output_mode == "regression":
             preds = np.squeeze(preds)
-        result = compute_metrics(eval_task, preds, out_label_ids)
-        results.update(result)
+        
+        global label_list
+        
+        pred_result = defaultdict(list)
+        for pred, label_id in zip(preds, out_label_ids):
+            pred_result[label_list[label_id]].append((pred, label_id))
+        pred_result = dict(pred_result)
+        for key in pred_result:
+            pred_result[key] = tuple(zip(*pred_result[key]))
+        pred_result['DEV'] = (preds, out_label_ids)
 
-        output_eval_file = os.path.join(eval_output_dir, prefix, "eval_results.txt")
-        with open(output_eval_file, "w") as writer:
-            logger.info("***** Eval results {} *****".format(prefix))
-            for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(result[key]))
-                writer.write("%s = %s\n" % (key, str(result[key])))
+        for name, (preds, label_ids) in pred_result.items():
+            preds, label_ids = np.asarray(preds), np.asarray(label_ids)
+            result = compute_metrics(eval_task, preds, label_ids)
+
+            output_eval_file = os.path.join(eval_output_dir, prefix, f"{name}_eval_results.txt")
+            with open(output_eval_file, "w") as writer:
+                logger.info("***** Eval results {} *****".format(prefix))
+                for key in sorted(result.keys()):
+                    logger.info(" %s-%s = %s", name, key, str(result[key]))
+                    writer.write("%s-%s = %s\n" % (name, key, str(result[key])))
 
     return results
 
@@ -354,13 +368,14 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         list(filter(None, args.model_name_or_path.split('/'))).pop(),
         str(args.max_seq_length),
         str(task)))
+    global label_list
+    label_list = processor.get_labels()
+    label_list = list(map(lambda key: mnli_label_map[key], label_list))
     if os.path.exists(cached_features_file) and not args.overwrite_cache:
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
-        label_list = processor.get_labels()
-        label_list = list(map(lambda key: mnli_label_map[key], label_list))
         if task in ['mnli', 'mnli-mm'] and args.model_type in ['roberta']:
             # HACK(label indices are swapped in RoBERTa pretrained model)
             label_list[1], label_list[2] = label_list[2], label_list[1] 

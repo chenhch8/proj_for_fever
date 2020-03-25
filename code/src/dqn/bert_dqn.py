@@ -160,32 +160,36 @@ class BertDQN(BaseDQN):
         return self.tokenizer.encode(text_sequence)
     
 
-    def convert_to_inputs_for_select_action(self, state: State, actions: List[Action]) -> List[dict]:
-        condidate = reduce(lambda seq1, seq2: seq1 + seq2,
-                           map(lambda sent: sent.tokens, state.candidate)) if len(state.candidate) else []
-        if len(actions):
+    def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
+        assert len(batch_state) == len(batch_actions)
+        batch_tokens_a, batch_tokens_b = [], []
+        max_seq_len = 0
+        for state, actions in zip(batch_state, batch_actions):
+            condidate = reduce(lambda seq1, seq2: seq1 + seq2,
+                               [sent.tokens for sent in state.candidate]) if len(state.candidate) else []
             length = self.max_seq_length - 3 - len(state.claim.tokens) - len(condidate)
             if length <= 0:
                 self.logger.info(state.candidate)
                 self.logger.info(f'claim: {len(state.claim.tokens)}; condidate: {len(condidate)}; length: {length}')
             assert length > 0
             all_tokens_a = [state.claim.tokens] * len(actions)
-            all_tokens_b = [condidate + action.sentence.tokens[:length] for action in actions]
-        else:
-            assert len(condidate)
-            all_tokens_a = [state.claim.tokens]
-            all_tokens_b = [condidate]
+            all_tokens_b = [condidate + action.sentence.tokens[:length] \
+                              if action.sentence != None else condidate \
+                                for action in actions]
+            
+            batch_tokens_a.extend(all_tokens_a)
+            batch_tokens_b.extend(all_tokens_b)
 
-        max_seq_len = max([len(tokens) for tokens in all_tokens_b]) + len(state.claim.tokens) + 3
+            cur_max_seq_len = max([len(tokens) for tokens in all_tokens_b]) \
+                              + len(state.claim.tokens) + 3
+            max_seq_len = max(cur_max_seq_len, max_seq_len)
 
         CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
         
-        interval = 5 * self.args.train_batch_size
-        inputs = [convert_tokens_to_bert_inputs(all_tokens_a[i:i + interval],
-                                                all_tokens_b[i:i + interval],
-                                                max_seq_len, CLS, SEP) \
-                                                #self.max_seq_length, CLS, SEP) \
-                  for i in range(0, len(all_tokens_b), interval)]
+        inputs = convert_tokens_to_bert_inputs(batch_tokens_a,
+                                               batch_tokens_b,
+                                               max_seq_len, CLS, SEP)
+                                                #self.max_seq_length, CLS, SEP)
 
         return inputs
     
@@ -193,18 +197,17 @@ class BertDQN(BaseDQN):
     def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
         assert len(states) == len(actions)
         all_tokens_a, all_tokens_b = [], []
-        #pdb.set_trace()
         for state, action in zip(states, actions):
             tokens_a = state.claim.tokens
             condidate = reduce(lambda seq1, seq2: seq1 + seq2,
-                               map(lambda sent: sent.tokens, state.candidate)) \
+                               [sent.tokens for sent in state.candidate]) \
                             if len(state.candidate) else []
-            # action=None: state_now is terminal state
-            # action!=None & action.sentence=None: state_next is not terminal but has not actions
+            # action=None: state is terminal state
+            # action.sentence=None: state is non terminal state but has no action sentence
+            tokens_b = condidate
             if action is not None and action.sentence is not None:
-                tokens_b = condidate + action.sentence.tokens
-            else:
-                tokens_b = condidate
+                tokens_b += action.sentence.tokens
+            assert len(tokens_b)
             all_tokens_a.append(tokens_a)
             all_tokens_b.append(tokens_b)
         max_seq_len = min(max([len(tokens_a) + len(tokens_b) + 3 \

@@ -20,8 +20,10 @@ class BaseEnv:
         return State(claim=state.claim,
                      label=state.label,
                      evidence_set=state.evidence_set,
-                     candidate=state.candidate + [action.sentence],
-                     pred_label=action.label)
+                     candidate=state.candidate + [action.sentence] \
+                                if action.sentence is not None else state.candidate,
+                     pred_label=action.label,
+                     count=state.count + 1)
 
     def score(self, state: State) -> float:
         return NotImplementedError()
@@ -46,13 +48,13 @@ class DuEnv(BaseEnv):
         return I * max_jaccard
 
     def reward(self, state_now: State, state_next: State) -> float:
-        if len(state_now.candidate) == self.K:
+        if state_now.count == self.K:
             return self.score(state_now)
         else:
             return self.score(state_now) - self.score(state_next)
     
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = len(state.candidate) >= self.K
+        done = state.count == self.K
         state_next = BaseEnv.new_state(state, action) if not done else None
         return state_next, self.reward(state, state_next), done
 
@@ -84,7 +86,7 @@ class ChenEnv(BaseEnv):
                 return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = len(state.candidate) >= self.K
+        done = state.count >= self.K
         state_next = BaseEnv.new_state(state, action) if not done else None
         return state_next, self.reward(state, action), done
 

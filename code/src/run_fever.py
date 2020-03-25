@@ -123,8 +123,10 @@ def train(args,
           agent: Agent,
           train_data: DataSet,
           epochs_trained: int=0,
-          loss_trained_in_current_epoch: float=0,
-          steps_trained_in_current_epoch: int=0) -> None:
+          acc_loss_trained_in_current_epoch: float=0,
+          steps_trained_in_current_epoch: int=0,
+          losses_trained_in_current_epoch: List[float]=[]) -> None:
+    logger.info('Training')
     env = Env[args.env](args.max_evi_size)
     memory = Memory[args.mem](args.capacity) 
     
@@ -135,35 +137,58 @@ def train(args,
         if epochs_trained > 0:
             epochs_trained -= 1
             continue
-        epoch_iterator = tqdm(train_ids,
-                              desc='[Train]Loss:---------',
+        epoch_iterator = tqdm([train_ids[i:i + 4] for i in range(0, len(train_ids), 4)],
+                              desc='Loss',
                               disable=args.local_rank not in [-1, 0])
-        t_loss, t_steps = loss_trained_in_current_epoch, steps_trained_in_current_epoch
-        t_losses, losses = [], []
-        for i, idx in enumerate(epoch_iterator):
+        t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
+        t_losses, losses = losses_trained_in_current_epoch, []
+        for step, idxs in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
                 continue
-            claim, label_id, evidence_set, sentences = train_data[idx]
-            state = State(claim=claim,
-                          label=label_id,
+            
+            batch_state, batch_actions = [], []
+            for idx in idxs:
+                claim, label, evidence_set, sentences = train_data[idx]
+                batch_state.append(
+                    State(claim=claim,
+                          label=label,
                           evidence_set=evidence_set,
                           pred_label=args.label2id['NOT ENOUGH INFO'],
-                          candidate=[])
-            actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
+                          candidate=[],
+                          count=0)
+                )
+                batch_actions.append(
+                    [Action(sentence=sent, label='F/T/N') for sent in sentences]
+                )
+
             while True:
-                action, _ = agent.select_action(state, actions, net=agent.q_net, is_eval=False)
-                state_next, reward, done = env.step(state, action)
-                next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions)) \
-                        if not done else []
-                if done: action = None
-                memory.push(Transition(state=state,
-                                       action=action,
-                                       next_state=state_next,
-                                       reward=reward,
-                                       next_actions=next_actions))
-                state = state_next
-                actions = next_actions
+                batch_selected_action, _ = agent.select_action(batch_state,
+                                                               batch_actions,
+                                                               net=agent.q_net,
+                                                               is_eval=False)
+                batch_state_next, batch_actions_next = [], []
+                for state, selected_action, actions in zip(batch_state,
+                                                           batch_selected_action,
+                                                           batch_actions):
+                    state_next, reward, done = env.step(state, selected_action)
+                    actions_next = None
+                    if not done:
+                        actions_next = \
+                                list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
+                                            actions)) if selected_action.sentence is not None else []
+                        if len(actions_next) == 0:
+                            actions_next = [Action(sentence=None, label='F/T/N')]
+                    memory.push(Transition(state=state,
+                                           action=selected_action,
+                                           next_state=state_next,
+                                           reward=reward,
+                                           next_actions=actions_next))
+                    if done: continue
+                    batch_state_next.append(state_next)
+                    batch_actions_next.append(actions_next)
+                batch_state = batch_state_next
+                batch_actions = batch_actions_next
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
                     if args.mem == 'priority':
@@ -178,14 +203,15 @@ def train(args,
                     t_loss += loss
                     t_steps += 1
                     losses.append(loss)
-                    epoch_iterator.set_description('[Train]Loss:%.8f' % loss)
+                    epoch_iterator.set_description('%.8f' % loss)
                     epoch_iterator.refresh()
-                if done or len(actions) == 0: break
-            if i and i % args.target_update == 0:
+                if len(batch_state) == 0: break
+            
+            if step and step % args.target_update == 0:
                 agent.soft_update_of_target_network(args.tau)
             
-            if i and i % args.save_steps == 0:
-                save_dir = os.path.join(args.output_dir, f'{epoch}-{i + 1}-{t_loss / t_steps}')
+            if step and step % args.save_steps == 0:
+                save_dir = os.path.join(args.output_dir, f'{epoch}-{step + 1}-{t_loss / t_steps}')
                 agent.save(save_dir)
                 with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                     pickle.dump(memory, fw)
@@ -195,6 +221,9 @@ def train(args,
                 losses = []
 
         epoch_iterator.close()
+
+        acc_loss_trained_in_current_epoch = 0
+        losses_trained_in_current_epoch = []
         
         if steps_trained_in_current_epoch == 0:
             save_dir = os.path.join(args.output_dir, f'{epoch + 1}-0-{t_loss / t_steps}')
@@ -203,6 +232,7 @@ def train(args,
                 pickle.dump(memory, fw)
             with open(os.path.join(save_dir, 'loss.txt'), 'w') as fw:
                 fw.write('\n'.join(list(map(str, t_losses))))
+                
     train_iterator.close()
 
 
@@ -212,51 +242,84 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token)
+    dev_ids = list(range(len(dev_data)))
+    epoch_iterator = tqdm([dev_ids[i:i+12] for i in range(0, len(dev_ids), 12)],
+                          disable=args.local_rank not in [-1, 0])
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
-        for claim, label_id, evidence_set, sentences in tqdm(dev_data):
-            #pdb.set_trace()
-            state = State(claim=claim,
-                          label=label_id,
+        for idxs in epoch_iterator:
+            batch_state, batch_actions = [], []
+            for idx in idxs:
+                claim, label, evidence_set, sentences = dev_data[idx]
+                batch_state.append(
+                    State(claim=claim,
+                          label=label,
                           evidence_set=evidence_set,
                           pred_label=args.label2id['NOT ENOUGH INFO'],
-                          candidate=[])
-            actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
-            q_values, states = [], []
+                          candidate=[],
+                          count=0)
+                )
+                batch_actions.append(
+                    [Action(sentence=sent, label='F/T/N') for sent in sentences]
+                )
+
+            q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
-                action, q_value = agent.select_action(state, actions, net=agent.q_net, is_eval=True)
-                state_next = BaseEnv.new_state(state, action)
-                next_actions = list(filter(lambda x: action.sentence.id != x.sentence.id, actions))
-                q_values.append(q_value)
-                states.append(state_next)
-                state = state_next
-                actions = next_actions
-                if len(next_actions) == 0: break
+                batch_selected_action, batch_q_value = \
+                        agent.select_action(batch_state,
+                                            batch_actions,
+                                            net=agent.q_net,
+                                            is_eval=True)
+                
+                batch_state_next, batch_actions_next = [], []
+                for state, selected_action, actions in zip(batch_state,
+                                                           batch_selected_action,
+                                                           batch_actions):
+                    state_next = BaseEnv.new_state(state, selected_action)
+                    actions_next = \
+                            list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
+                                        actions)) if selected_action.sentence is not None else []
+                    if len(actions_next) == 0:
+                        actions_next = [Action(sentence=None, label='F/T/N')]
+                    
+                    batch_state_next.append(state_next)
+                    batch_actions_next.append(actions_next)
+                
+                q_value_seq.append(batch_q_value)
+                state_seq.append(batch_state_next)
+
+                batch_state = batch_state_next
+                batch_actions = batch_actions_next
 
             if args.env == 'DuEnv':
-                score_t = q_values[-1]
-                max_score = score_t
-                max_t = len(q_values) - 1
-                for t in range(len(states) - 2, -1, -1):
-                    score_t = q_values[t] - args.eps_gamma * q_values[t + 1] + score_t
-                    if max_score < score_t:
-                        max_score = score_t
-                        max_t = t
+                batch_score = list(q_value_seq[-1])
+                batch_max_score = batch_score.copy()
+                batch_max_t = [-1] * len(state_seq[0])
+                for t in range(len(state_seq) - 2, -1, -1):
+                    batch_q_now = q_value_seq[t]
+                    batch_q_next = q_value_seq[t + 1]
+                    for i, (q_now, q_next) in enumerate(zip(batch_q_now, batch_q_next)):
+                        batch_score[i] = q_now - args.eps_gamma * q_next + batch_score[i]
+                        if batch_max_score[i] < batch_score[i]:
+                            batch_max_score[i] = batch_score[i]
+                            batch_max_t[i] = t
             else:
-                max_t = -1
-            #if states[max_t].pred_label != 2:
-            #    pdb.set_trace()
-            results.append({
-                'id': claim.id,
-                'label': args.id2label[states[max_t].label],
-                'evidence': states[max_t].evidence_set,
-                'predicted_label': args.id2label[states[max_t].pred_label],
-                'predicted_evidence': \
-                    reduce(lambda seq1, seq2: seq1 + seq2,
-                           map(lambda sent: [list(sent.id)], states[max_t].candidate)) \
-                        if len(states[max_t].candidate) else []
-            })
+                batch_max_t = [-1] * len(state_seq[0])
+
+            assert len(batch_max_t) == len(idxs)
+            for i, max_t in enumerate(batch_max_t):
+                state = state_seq[max_t][i]
+                results.append({
+                    'id': state.claim.id,
+                    'label': args.id2label[state.label],
+                    'evidence': state.evidence_set,
+                    'predicted_label': args.id2label[state.pred_label],
+                    'predicted_evidence': \
+                        reduce(lambda seq1, seq2: seq1 + seq2,
+                               map(lambda sent: [list(sent.id)], state.candidate)) \
+                            if len(state.candidate) else []
+                })
 
     with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
         json.dump(results, fw)
@@ -278,20 +341,26 @@ def run_dqn(args) -> None:
                                            os.path.join(args.data_dir, 'train.jsonl'),
                                            agent.token)
         epochs_trained = 0
-        loss_trained_in_current_epoch = 0
+        acc_loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0
+        losses_trained_in_current_epoch = []
         if args.checkpoint:
             names = list(filter(lambda x: x != '', args.checkpoint.split('/')))[-1].split('-')
             epochs_trained = int(names[0])
             steps_trained_in_current_epoch = int(names[1])
-            loss_trained_in_current_epoch = float('.'.join(names[2].split('.')[:-1])) * steps_trained_in_current_epoch
+            acc_loss_trained_in_current_epoch = float('.'.join(names[2].split('.')[:-1])) * steps_trained_in_current_epoch
             agent.load(args.checkpoint)
             with open(os.path.join(args.checkpoint, 'memory.pk'), 'rb') as fr:
                 memory = pickle.load(fr)
-        train(args, agent, train_data,
+            with open(os.path.join(args.checkpoint, 'loss.txt'), 'r') as fr:
+                losses_trained_in_current_epoch = list(map(float, fr.readlines()))
+        train(args,
+              agent,
+              train_data,
               epochs_trained,
-              loss_trained_in_current_epoch,
-              steps_trained_in_current_epoch)
+              acc_loss_trained_in_current_epoch,
+              steps_trained_in_current_epoch,
+              losses_trained_in_current_epoch)
         
     if args.do_eval:
         assert args.checkpoint is not None

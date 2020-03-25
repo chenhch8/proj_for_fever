@@ -9,6 +9,7 @@ import os
 
 import pdb
 
+from collections import defaultdict
 from typing import List, Tuple
 from data.structure import Transition, Action, State
 
@@ -66,65 +67,65 @@ class BaseDQN:
         
         batch = Transition(*zip(*transitions))
         
-        # max state value of t_net
-        next_states = list(filter(lambda s: s is not None, batch.next_state))
-        ## max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
-        max_actions, max_q_values = \
-            tuple(zip(*[self.select_action(next_state, \
-                                           next_actions, \
-                                           is_eval=False, \
-                                           net=self.q_net if self.dqn_type == 'ddqn' else self.t_net) \
-                         for next_state, next_actions in zip(batch.next_state, batch.next_actions) \
-                            if next_state is not None]))
-        assert len(max_actions) == len(next_states)
+        batch_state_next, batch_actions_next = \
+                list(zip(*[(next_state, next_actions) \
+                           for next_state, next_actions in zip(batch.next_state,
+                                                               batch.next_actions) \
+                           if next_state != None]))
+        # max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
+        batch_max_action, batch_max_q_value = \
+            self.select_action(batch_state_next,
+                               batch_actions_next,
+                               is_eval=False,
+                               net=self.q_net if self.dqn_type == 'ddqn' else self.t_net)
+        assert len(batch_max_action) == len(batch_state_next)
 
-        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
-                                      dtype=torch.bool, device=self.device)
-        next_state_values = torch.zeros(non_final_mask.size(), dtype=torch.float, device=self.device)
+        # max next state_action value
+        no_final_mask = torch.tensor([next_state != None for next_state in batch.next_state],
+                                     dtype=torch.bool, device=self.device)
+        next_state_values = torch.zeros(no_final_mask.size(), dtype=torch.float, device=self.device)
         if self.args.dqn_type == 'dqn':
-            next_state_values[non_final_mask] = \
-                torch.tensor(max_q_values, dtype=torch.float, device=self.device)
+            next_state_values[no_final_mask] = \
+                torch.tensor(batch_max_q_value, dtype=torch.float, device=self.device)
         elif self.args.dqn_type == 'ddqn':
-            max_labels = torch.tensor([action.label for action in max_actions],
+            max_labels = torch.tensor([action.label for action in batch_max_action],
                                       dtype=torch.long, device=self.device).view(-1, 1)
-            next_state_values[non_final_mask] = \
+            next_state_values[no_final_mask] = \
                 self.t_net(
-                    **self.convert_to_inputs_for_update(next_states, max_actions)
+                    **self.convert_to_inputs_for_update(batch_state_next, batch_max_action)
                 )[0].gather(dim=1, index=max_labels).detach().view(-1)
             del max_labels
         else:
             raise ValueError('dqn_type: dqn/ddqn')
-        del max_actions, max_q_values
+        del batch_max_action, batch_max_q_value, no_final_mask
         
         # rceward
         rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
         
-        # compute the expected Q values
+        # expected Q values
         assert next_state_values.size() == rewards.size()
         expected_state_action_values = next_state_values * self.eps_gamma + rewards
         del rewards
 
         # state_action value of q_net
-        labels = torch.tensor([action.label if action is not None else state.pred_label \
-                                for state, action in zip(batch.state, batch.action)],
+        labels = torch.tensor([action.label if state_next != None else state.pred_label \
+                                for state, action, state_next in zip(batch.state, batch.action, batch.next_state)],
                                dtype=torch.long, device=self.device).view(-1, 1)
         state_action_values = self.q_net(
             **self.convert_to_inputs_for_update(batch.state, batch.action)
         )[0].gather(dim=1, index=labels).view(-1)
         del labels
-        #print(state_action_values.size())
         
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
                                 reduction='none')
-        if isweights is not None:
+        if isweights != None:
             isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
             assert loss.size() == isweights.size()
             mloss = (loss * isweights).mean()
         else:
             mloss = loss.mean()
-        #if self.args.n_gpu > 1:
-        #    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+        
         # optimize model
         mloss.backward()
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),
@@ -139,39 +140,55 @@ class BaseDQN:
         return loss.detach().cpu().data
 
 
-    def select_action(self, state: State,
-                      actions: List[Action],
+    def select_action(self,
+                      batch_state: List[State],
+                      batch_actions: List[List[Action]],
                       net: nn.Module,
-                      is_eval: bool=False) -> Tuple[Action, float]:
-        self.t_net.eval()
+                      is_eval: bool=False) -> Tuple[List[Action], List[float]]:
+        assert len(batch_state) == len(batch_actions)
+        MAX_SIZE = 256 * 256
+
         if is_eval: net.eval()
-        
+
         q_values = None
         with torch.no_grad():
-            inputs = self.convert_to_inputs_for_select_action(state, actions)
+            batch_inputs = self.convert_to_inputs_for_select_action(batch_state, batch_actions)
+            K, DIM = list(batch_inputs.values())[0].size()
+            INTERVAL = MAX_SIZE // DIM
             q_values = [net(
-                **dict(map(lambda x: (x[0], x[1].to(self.device)), clip_inputs.items()))
-            )[0] for clip_inputs in inputs]
-            q_values = torch.cat(q_values, dim=0).cpu().data
-        # epsilon greedy
-        sample = random.random()
-        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
-            math.exp(-1. * self.steps_done / self.eps_decay)
-        if sample > eps_threshold or is_eval:
-            max_action = q_values.argmax().item()
-            sent_id = max_action // self.args.num_labels
-            label_id = max_action % self.args.num_labels
-        else:
-            #pdb.set_trace()
-            sent_id = random.randint(0, max(0, len(actions) - 1))
-            label_id = random.randint(0, self.args.num_labels - 1)
-        if len(actions):
-            action = Action(sentence=actions[sent_id].sentence, label=label_id)
-        else:
-            assert q_values.size(0) == 1 and sent_id == 0
-            action = Action(sentence=None, label=label_id)
-        q = q_values[sent_id, label_id].item()
-        return action, q
+                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
+                                       batch_inputs.items()))
+                        )[0].cpu().data for i in range(0, K, INTERVAL)]
+            q_values = torch.cat(q_values, dim=0)
+            assert q_values.size(0) == K
+        
+        batch_selected_action, offset = [], 0
+        for state, actions in zip(batch_state, batch_actions):
+            cur_q_values = q_values[offset:offset + len(actions)]
+            # epsilon greedy
+            sample = random.random()
+            eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
+                math.exp(-1. * self.steps_done / self.eps_decay)
+            if sample > eps_threshold or is_eval:
+                max_action = cur_q_values.argmax().item()
+                sent_id = max_action // self.args.num_labels
+                label_id = max_action % self.args.num_labels
+            else:
+                #pdb.set_trace()
+                sent_id = random.randint(0, max(0, len(actions) - 1))
+                label_id = random.randint(0, self.args.num_labels - 1)
+            
+            if actions[0].sentence is None:
+                assert len(actions) == 1 and cur_q_values.size(0) == 1
+                action = Action(sentence=None, label=label_id)
+            else:
+                action = Action(sentence=actions[sent_id].sentence, label=label_id)
+
+            q = cur_q_values[sent_id, label_id].item()
+            batch_selected_action.append((action, q))
+            offset += len(actions)
+
+        return tuple(zip(*batch_selected_action))
 
 
     def save(self, output_dir: str) -> None:
@@ -194,10 +211,8 @@ class BaseDQN:
         state_dict = torch.load(os.path.join(input_dir, 'model.bin'),
                                 map_location=lambda storage, loc: storage)
         q_net.load_state_dict(state_dict['q_net'])
-        if 'steps_done' in state_dict:
-            self.steps_done = state_dict['steps_done']
-        if 'optimizer' in state_dict:
-            self.optimizer.load_state_dict(state_dict['optimizer'])
+        self.steps_done = state_dict['steps_done']
+        self.optimizer.load_state_dict(state_dict['optimizer'])
         if self.scheduler is not None and 'scheduler' in state_dict:
             self.scheduler.load_state_dict(['scheduler'])
         self.soft_update_of_target_network(1)

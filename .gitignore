@@ -3,3 +3,4 @@ code/data/*
 code/*.sh
 code/*output*/*
 code/.*
+code/show_loss.py

@@ -4,7 +4,7 @@ from typing import List
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'next_actions'))
 Action = namedtuple('Action', ('label', 'sentence'))
-State = namedtuple('State', ('claim', 'label', 'evidence_set', 'candidate', 'pred_label'))
+State = namedtuple('State', ('claim', 'label', 'evidence_set', 'candidate', 'pred_label', 'count'))
 Sentence = namedtuple('Sentence', ('id', 'tokens', 'str'))
 Claim = namedtuple('Claim', ('id', 'str', 'tokens'))
 Evidence = List[Sentence]

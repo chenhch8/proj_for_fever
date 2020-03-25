@@ -57,10 +57,14 @@ def process_data(instances):
         documents = dict(documents)
 
         for evidence in evidence_set:
-            evi_str = ' '.join([documents[title][line_num] for title, line_num in evidence[:5] \
+            if len(evidence) > 1: continue
+            #evi_str = ' '.join([documents[title][line_num] for title, line_num in evidence[:5] \
+            #                   if title in documents and line_num in documents[title]])
+            evi_str = ' '.join([documents[title][line_num] for title, line_num in evidence \
                                if title in documents and line_num in documents[title]])
             if evi_str == '': continue
-            label = instance['label'] if len(evidence) <= 5 else 'NOT ENOUGH INFO'
+            #label = instance['label'] if len(evidence) <= 5 else 'NOT ENOUGH INFO'
+            label = instance['label']
             new_instances.append({
                 'id': str(instance['id']),
                 'claim': instance['claim'],
