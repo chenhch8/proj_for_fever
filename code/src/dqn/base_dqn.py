@@ -158,7 +158,7 @@ class BaseDQN:
             q_values = [net(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
                                        batch_inputs.items()))
-                        )[0].cpu().data for i in range(0, K, INTERVAL)]
+                        )[0] for i in range(0, K, INTERVAL)]
             q_values = torch.cat(q_values, dim=0)
             assert q_values.size(0) == K
         

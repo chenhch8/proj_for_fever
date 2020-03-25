@@ -172,6 +172,7 @@ def train(args,
                                                            batch_selected_action,
                                                            batch_actions):
                     state_next, reward, done = env.step(state, selected_action)
+                    if done: continue
                     actions_next = None
                     if not done:
                         actions_next = \
@@ -184,7 +185,6 @@ def train(args,
                                            next_state=state_next,
                                            reward=reward,
                                            next_actions=actions_next))
-                    if done: continue
                     batch_state_next.append(state_next)
                     batch_actions_next.append(actions_next)
                 batch_state = batch_state_next
