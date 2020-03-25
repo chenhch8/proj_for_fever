@@ -6,7 +6,7 @@ import torch
 #from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 from functools import reduce
-from typing import List
+from typing import List, Tuple
 import pdb
 
 from .base_dqn import BaseDQN
@@ -83,12 +83,12 @@ def convert_tokens_to_bert_inputs(all_tokens_a: List[int],
     for tokens_a, tokens_b in zip(all_tokens_a, all_tokens_b):
         b_len = max_seq_len - 3 - len(tokens_a)
         assert b_len > 0
-        inputs_ids = [CLS] + tokens_a + [SEP] + tokens_b[:b_len] + [SEP]
-        inputs_mask = [1] * len(inputs_ids)
-        segment_ids = [0] * (2 + len(tokens_a)) + [1] * (len(inputs_ids) - len(tokens_a) - 2)
+        inputs_ids = (CLS,) + tokens_a + (SEP,) + tokens_b[:b_len] + (SEP,)
+        inputs_mask = (1,) * len(inputs_ids)
+        segment_ids = (0,) * (2 + len(tokens_a)) + (1,) * (len(inputs_ids) - len(tokens_a) - 2)
         assert len(inputs_ids) == len(inputs_mask) == len(segment_ids)
         
-        padding = [0] * (max_seq_len - len(inputs_ids))
+        padding = (0,) * (max_seq_len - len(inputs_ids))
         all_inputs_ids.append(inputs_ids + padding)
         all_inputs_mask.append(inputs_mask + padding)
         all_segment_ids.append(segment_ids + padding)
@@ -113,7 +113,7 @@ class BertDQN(BaseDQN):
             args.model_name_or_path,
             num_labels=args.num_labels,
             finetuning_task=args.task_name,
-            #cache_dir=args.cache_dir if args.cache_dir else None,
+            #cache_dir=args.cache_dir if argsche_dir else None,
         )
         self.tokenizer = tokenizer_class.from_pretrained(
             args.model_name_or_path,
@@ -156,8 +156,8 @@ class BertDQN(BaseDQN):
         #)
 
 
-    def token(self, text_sequence: str) -> List[int]:
-        return self.tokenizer.encode(text_sequence)
+    def token(self, text_sequence: str) -> Tuple[int]:
+        return tuple(self.tokenizer.encode(text_sequence))
     
 
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
@@ -166,7 +166,7 @@ class BertDQN(BaseDQN):
         max_seq_len = 0
         for state, actions in zip(batch_state, batch_actions):
             candidate = reduce(lambda seq1, seq2: seq1 + seq2,
-                               [sent.tokens for sent in state.candidate]) if len(state.candidate) else []
+                               [sent.tokens for sent in state.candidate]) if len(state.candidate) else ()
             length = self.max_seq_length - 3 - len(state.claim.tokens) - len(candidate)
             if length <= 0:
                 self.logger.info(state.candidate)
@@ -174,7 +174,7 @@ class BertDQN(BaseDQN):
             assert length > 0
             all_tokens_a = [state.claim.tokens] * len(actions)
             all_tokens_b = [candidate + action.sentence.tokens[:length] \
-                              if action.sentence != None else candidate.copy() \
+                              if action.sentence != None else candidate \
                                 for action in actions]
             
             batch_tokens_a.extend(all_tokens_a)
@@ -200,12 +200,12 @@ class BertDQN(BaseDQN):
             tokens_a = state.claim.tokens
             candidate = reduce(lambda seq1, seq2: seq1 + seq2,
                                [sent.tokens for sent in state.candidate]) \
-                            if len(state.candidate) else []
+                            if len(state.candidate) else ()
             # action=None: state is terminal state
             # action.sentence=None: state is non terminal state but has no action sentence
-            tokens_b = candidate.copy()
+            tokens_b = candidate
             if action is not None and action.sentence is not None:
-                tokens_b += action.sentence.tokens
+                tokens_b = tokens_b + action.sentence.tokens
             assert len(tokens_b)
             all_tokens_a.append(tokens_a)
             all_tokens_b.append(tokens_b)

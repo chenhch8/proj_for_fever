@@ -231,7 +231,7 @@ class BaseDQN:
             target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
 
     
-    def token(self, sentences: List[str]) -> List[List[int]]:
+    def token(self, text_sequence: str) -> Tuple[int]:
         return NotImplementedError()
 
 
