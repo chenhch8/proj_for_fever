@@ -158,7 +158,7 @@ class BaseDQN:
             q_values = [net(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
                                        batch_inputs.items()))
-                        )[0].cpu().data for i in range(0, K, INTERVAL)]
+                        )[0] for i in range(0, K, INTERVAL)]
             q_values = torch.cat(q_values, dim=0)
             assert q_values.size(0) == K
         
@@ -170,11 +170,19 @@ class BaseDQN:
             eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
                 math.exp(-1. * self.steps_done / self.eps_decay)
             if sample > eps_threshold or is_eval:
-                max_action = cur_q_values.argmax().item()
-                sent_id = max_action // self.args.num_labels
-                label_id = max_action % self.args.num_labels
+                TF_q = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
+                N_q = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
+                comp = TF_q < N_q
+                if torch.prod(comp):
+                    max_action = cur_q_values.argmax().item()
+                    sent_id = max_action // self.args.num_labels
+                    label_id = max_action % self.args.num_labels
+                else:
+                    indics = (~comp).sum(dim=1).nonzero().view(-1)
+                    max_action = cur_q_values[indics].argmax().item()
+                    sent_id = indics[max_action // self.args.num_labels].item()
+                    label_id = max_action % self.args.num_labels
             else:
-                #pdb.set_trace()
                 sent_id = random.randint(0, max(0, len(actions) - 1))
                 label_id = random.randint(0, self.args.num_labels - 1)
             
