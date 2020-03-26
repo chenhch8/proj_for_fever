@@ -74,7 +74,7 @@ class ChenEnv(BaseEnv):
                             for evi in state.evidence_set])
         else:
             cond1 = state.label == action.label
-            cond2 = any([action.sentence in evi for evi in state.evidence_set])
+            cond2 = any([action.sentence in evi for evi in state.evidence_set]) or action.sentence is None
 
         if state.label == 2: # N
             return 1. if cond1 else -1.
