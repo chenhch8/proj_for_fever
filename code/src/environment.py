@@ -24,6 +24,9 @@ class BaseEnv:
                                 if action.sentence is not None else state.candidate,
                      pred_label=action.label,
                      count=state.count + 1)
+    
+    def is_done(self, state: State) -> bool:
+        return state.count == self.K
 
     def score(self, state: State) -> float:
         return NotImplementedError()
@@ -48,13 +51,13 @@ class DuEnv(BaseEnv):
         return I * max_jaccard
 
     def reward(self, state_now: State, state_next: State) -> float:
-        if state_now.count == self.K:
+        if self.is_done(state_now):
             return self.score(state_now)
         else:
             return self.score(state_now) - self.score(state_next)
     
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = state.count == self.K
+        done = state.is_done(state)
         state_next = BaseEnv.new_state(state, action) if not done else None
         return state_next, self.reward(state, state_next), done
 
@@ -63,17 +66,17 @@ class ChenEnv(BaseEnv):
     def __init__(self, K=5):
         super(ChenEnv, self).__init__(K)
 
-    def reward(self, state_now: State, action: Action) -> float:
-        if len(state_now.candidate) == self.K:
-            candidate = get_id_from_evidence(state_now.candidate)
-            cond1 = state_now.pred_label == state_now.label
+    def reward(self, state: State, action: Action) -> float:
+        if self.is_done(state):
+            candidate = get_id_from_evidence(state.candidate)
+            cond1 = state.pred_label == state.label
             cond2 = any([len(get_id_from_evidence(evi) - candidate) == 0 \
-                            for evi in state_now.evidence_set])
+                            for evi in state.evidence_set])
         else:
-            cond1 = state_now.label == action.label
-            cond2 = any([action.sentence in evi for evi in state_now.evidence_set])
+            cond1 = state.label == action.label
+            cond2 = any([action.sentence in evi for evi in state.evidence_set])
 
-        if state_now.label == 2: # N
+        if state.label == 2: # N
             return 1. if cond1 else -1.
         else: # T/F
             if cond1 and cond2:
@@ -86,7 +89,7 @@ class ChenEnv(BaseEnv):
                 return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = state.count >= self.K
+        done = self.is_done(state)
         state_next = BaseEnv.new_state(state, action) if not done else None
         return state_next, self.reward(state, action), done
 
