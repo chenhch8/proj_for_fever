@@ -57,7 +57,7 @@ class DuEnv(BaseEnv):
             return self.score(state_now) - self.score(state_next)
     
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = state.is_done(state)
+        done = self.is_done(state)
         state_next = BaseEnv.new_state(state, action) if not done else None
         return state_next, self.reward(state, state_next), done
 
