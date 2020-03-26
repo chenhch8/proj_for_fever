@@ -158,7 +158,7 @@ class BaseDQN:
             q_values = [net(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
                                        batch_inputs.items()))
-                        )[0].cpu().data for i in range(0, K, INTERVAL)]
+                        )[0] for i in range(0, K, INTERVAL)]
             q_values = torch.cat(q_values, dim=0)
             assert q_values.size(0) == K
         
@@ -224,7 +224,7 @@ class BaseDQN:
         self.t_net.eval()
 
 
-    def soft_update_of_target_network(self, tau: float =1.) -> None:
+    def soft_update_of_target_network(self, tau: float=1.) -> None:
         """Updates the target network in the direction of the local network but by taking a step size
         less than one so the target network's parameter values trail the local networks. This helps stabilise training"""
         for target_param, local_param in zip(self.t_net.parameters(), self.q_net.parameters()):
