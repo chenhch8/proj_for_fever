@@ -243,7 +243,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token)
     dev_ids = list(range(len(dev_data)))
-    epoch_iterator = tqdm([dev_ids[i:i+12] for i in range(0, len(dev_ids), 12)],
+    epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
                           disable=args.local_rank not in [-1, 0])
     results = []
     logger.info('Evaluating')
