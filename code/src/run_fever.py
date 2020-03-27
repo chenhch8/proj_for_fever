@@ -62,14 +62,14 @@ def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_ev
                 instance = json.loads(line.decode('utf-8').strip())
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=token_fn(instance['claim'])[:args.max_sent_length])
+                              tokens=token_fn(instance['claim'], max_length=args.max_sent_length))
                 sent2id = {}
                 sentences = []
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence)[:args.max_sent_length]))
+                                                  tokens=token_fn(sentence, max_length=args.max_sent_length)))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
                 evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                     for title, line_num in evi] \
