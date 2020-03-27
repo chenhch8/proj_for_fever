@@ -100,14 +100,14 @@ def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_ev
                 instance = json.loads(line.decode('utf-8').strip())
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=token_fn(instance['claim'])[:args.max_sent_length])
+                              tokens=token_fn(instance['claim'], max_length=args.max_sent_length))
                 sent2id = {}
                 sentences = []
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence)[:args.max_sent_length]))
+                                                  tokens=token_fn(sentence, max_length=args.max_sent_length)))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
                 
                 if not is_eval:
@@ -287,7 +287,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token)
     dev_ids = list(range(len(dev_data)))
-    epoch_iterator = tqdm([dev_ids[i:i+12] for i in range(0, len(dev_ids), 12)],
+    epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
                           disable=args.local_rank not in [-1, 0])
     results = []
     logger.info('Evaluating')

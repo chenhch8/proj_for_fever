@@ -156,8 +156,10 @@ class BertDQN(BaseDQN):
         #)
 
 
-    def token(self, text_sequence: str) -> Tuple[int]:
-        return tuple(self.tokenizer.encode(text_sequence))
+    def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
+        return tuple(self.tokenizer.encode(text_sequence,
+                                           add_special_tokens=False,
+                                           max_length=max_length))
     
 
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
