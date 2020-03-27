@@ -263,7 +263,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                 batch_actions.append(
                     [Action(sentence=sent, label='F/T/N') for sent in sentences]
                 )
-
+            
             q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
                 batch_selected_action, batch_q_value = \
