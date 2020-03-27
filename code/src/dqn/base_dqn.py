@@ -140,6 +140,14 @@ class BaseDQN:
         return loss.detach().cpu().data
 
 
+    @property
+    def epsilon_greedy(self):
+        sample = random.random()
+        threshold = self.eps_end + (self.eps_start - self.eps_end) * \
+            math.exp(-1. * self.steps_done / self.eps_decay)
+        return sample > threshold
+
+
     def select_action(self,
                       batch_state: List[State],
                       batch_actions: List[List[Action]],
@@ -165,11 +173,7 @@ class BaseDQN:
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
             cur_q_values = q_values[offset:offset + len(actions)]
-            # epsilon greedy
-            sample = random.random()
-            eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
-                math.exp(-1. * self.steps_done / self.eps_decay)
-            if sample > eps_threshold or is_eval:
+            if self.epsilon_greedy or is_eval:
                 max_action = cur_q_values.argmax().item()
                 sent_id = max_action // self.args.num_labels
                 label_id = max_action % self.args.num_labels
