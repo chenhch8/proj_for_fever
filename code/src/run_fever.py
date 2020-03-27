@@ -45,6 +45,42 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
+def generate_sequences(claim: Claim, label: str, evidence_set: EvidenceSet,
+                       env: BaseEnv, label2id: dict) -> List[List[Transition]]:
+    # T/F sequences
+    all_sequences = []
+    for evi in evidence_set:
+        if len(evi) > 5: continue
+        sequence = []
+        state = State(claim=claim,
+                      label=label2id[label],
+                      pred_label=label2id['NOT ENOUGH INFO'],
+                      candidate=[],
+                      evidence_set=evidence_set,
+                      count=0)
+        # actions: 仅限于证据包含的所有句子
+        actions = [Action(sentence=sent, label=label2id[label]) for sent in evi]
+        actions_next = actions
+        for action in actions:
+            state_next, reward, _ = env.step(state, action)
+            #if any([action_next.sentence is None for action_next in actions_next]):
+            #    pdb.set_trace()
+            actions_next = [action_next for action_next in actions_next \
+                                if action_next.sentence.id != action.sentence.id]
+            if len(actions_next) == 0:
+                assert action == actions[-1]
+                actions_next = [Action(sentence=None, label=label2id[label])]
+            sequence.append(Transition(state=state,
+                                       action=action,
+                                       next_state=state_next,
+                                       reward=reward,
+                                       next_actions=actions_next))
+            state = state_next
+        if len(sequence):
+            all_sequences.append(sequence)
+    return all_sequences
+
+
 def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False, env_type: str=None) \
         -> DataSet:
     env = None if is_eval else Env[env_type](5)
@@ -78,34 +114,8 @@ def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_ev
                     evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                         for title, line_num in evi] \
                                             for evi in instance['evidence_set']]
-                    # T/F sequences
-                    all_sequences = []
-                    for evi in evidence_set:
-                        if len(evi) > 5: continue
-                        sequence = []
-                        state = State(claim=claim,
-                                      label=args.label2id[instance['label']],
-                                      pred_label=args.label2id['NOT ENOUGH INFO'],
-                                      candidate=[],
-                                      evidence_set=evidence_set,
-                                      count=0)
-                        # actions: 仅限于证据包含的所有句子
-                        actions = [Action(sentence=sent, label=args.label2id[instance['label']]) \
-                                    for sent in evi]
-                        actions_next = actions
-                        for action in actions:
-                            state_next, reward, _ = env.step(state, action)
-                            actions_next = [action_next for action_next in actions_next \
-                                                if action_next.sentence.id != action.sentence.id]
-                            sequence.append(Transition(state=state,
-                                                       action=action,
-                                                       next_state=state_next,
-                                                       reward=reward,
-                                                       next_actions=actions_next))
-                            state = state_next
-                        if len(sequence):
-                            all_sequences.append(sequence)
-                    data.append((claim, args.label2id[instance['label']], evidence_set, sentences, all_sequences))
+                    sequences = generate_sequences(claim, instance['label'], evidence_set, env, args.label2id)
+                    data.append((claim, args.label2id[instance['label']], evidence_set, sentences, sequences))
                 else:
                     evidence_set = instance['evidence_set']
                     data.append((claim, args.label2id[instance['label']], evidence_set, sentences))

@@ -56,7 +56,7 @@ class ReplayMemory:
     def sample_from_sequences(self):
         data = []
         for sequences in self.sequences.values():
-            data += random.sample(sequences, 1)
+            data += random.choice(sequences)
         random.shuffle(data)
         return data
 
