@@ -45,13 +45,13 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False, env: str=None) \
+def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False, env_type: str=None) \
         -> DataSet:
-    env = None if is_eval else Env[env](5)
+    env = None if is_eval else Env[env_type](5)
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
         'cached_{}_{}_{}.pk'.format(
-            f'train-with-true-sequence_{env}' if filename.find('train') != -1 else 'dev',
+            f'train-with-true-sequence-{env_type}' if filename.find('train') != -1 else 'dev',
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             args.max_sent_length)
     )
@@ -83,14 +83,15 @@ def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_ev
                     for evi in evidence_set:
                         if len(evi) > 5: continue
                         sequence = []
-                        state = State(label=args.label2id[instance['label']],
+                        state = State(claim=claim,
+                                      label=args.label2id[instance['label']],
                                       pred_label=args.label2id['NOT ENOUGH INFO'],
                                       candidate=[],
                                       evidence_set=evidence_set,
                                       count=0)
                         # actions: 仅限于证据包含的所有句子
-                        actions = [Action(sentence=sent.sentence, label=args.label2id[instance['label']]) \
-                                   for sent in evi]
+                        actions = [Action(sentence=sent, label=args.label2id[instance['label']]) \
+                                    for sent in evi]
                         actions_next = actions
                         for action in actions:
                             state_next, reward, _ = env.step(state, action)
@@ -372,7 +373,8 @@ def run_dqn(args) -> None:
     if args.do_train:
         train_data = load_and_process_data(args,
                                            os.path.join(args.data_dir, 'train.jsonl'),
-                                           agent.token)
+                                           agent.token,
+                                           env_type=args.env)
         epochs_trained = 0
         acc_loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0

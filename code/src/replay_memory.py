@@ -15,7 +15,7 @@ class ReplayMemory:
         self.position = 0
         self.length = 0
         # sequences
-        self.sequences = defaultdict(list)
+        self.sequences = {}
         # epsilon greedy
         self.eps_count = 0
     
@@ -30,7 +30,7 @@ class ReplayMemory:
     def reset(self) -> None:
         self.position = 0
         self.length = 0
-        self.sequences = defaultdict(list)
+        self.sequences = {}
         self.eps_count = 0
 
     def push(self, item: Transition) -> None:
@@ -39,6 +39,9 @@ class ReplayMemory:
         self.length = min(self.length + 1, self.capacity)
 
     def push_sequence(self, key, sequences: List[List[Transition]]):
+        if not len(sequences): return
+        if key not in self.sequences:
+            self.sequences[key] = []
         self.sequences[key].extend(sequences)
 
     def sample(self, batch_size: int, prob: float) -> List[Transition]:
