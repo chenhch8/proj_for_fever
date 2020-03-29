@@ -45,13 +45,51 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
+def generate_sequences(claim: Claim, label: str, evidence_set: EvidenceSet,
+                       env: BaseEnv, label2id: dict) -> List[List[Transition]]:
+    # T/F sequences
+    all_sequences = []
+    for evi in evidence_set:
+        if len(evi) > 5: continue
+        sequence = []
+        state = State(claim=claim,
+                      label=label2id[label],
+                      pred_label=label2id['NOT ENOUGH INFO'],
+                      candidate=[],
+                      evidence_set=evidence_set,
+                      count=0)
+        # actions: 仅限于证据包含的所有句子
+        actions = [Action(sentence=sent, label=label2id[label]) for sent in evi]
+        actions_next = actions
+        for action in actions:
+            state_next, reward, _ = env.step(state, action)
+            #if any([action_next.sentence is None for action_next in actions_next]):
+            #    pdb.set_trace()
+            actions_next = [action_next for action_next in actions_next \
+                                if action_next.sentence.id != action.sentence.id]
+            if len(actions_next) == 0:
+                assert action == actions[-1]
+                actions_next = [Action(sentence=None, label=label2id[label])]
+            sequence.append(Transition(state=state,
+                                       action=action,
+                                       next_state=state_next,
+                                       reward=reward,
+                                       next_actions=actions_next))
+            state = state_next
+        if len(sequence):
+            all_sequences.append(sequence)
+    return all_sequences
+
+
+def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False, env_type: str=None) \
         -> DataSet:
+    env = None if is_eval else Env[env_type](5)
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_{}.pk'.format('train' if filename.find('train') != -1 else 'dev',
-                                    list(filter(None, args.model_name_or_path.split('/'))).pop(),
-                                    args.max_sent_length)
+        'cached_{}_{}_{}.pk'.format(
+            f'train-with-true-sequence-{env_type}' if filename.find('train') != -1 else 'dev',
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            args.max_sent_length)
     )
     data = None
     if not os.path.exists(cached_file):
@@ -71,11 +109,16 @@ def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_ev
                                                   str=sentence,
                                                   tokens=token_fn(sentence, max_length=args.max_sent_length)))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
-                evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
-                                    for title, line_num in evi] \
-                                        for evi in instance['evidence_set']] \
-                                if not is_eval else instance['evidence_set']
-                data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
+                
+                if not is_eval:
+                    evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
+                                        for title, line_num in evi] \
+                                            for evi in instance['evidence_set']]
+                    sequences = generate_sequences(claim, instance['label'], evidence_set, env, args.label2id)
+                    data.append((claim, args.label2id[instance['label']], evidence_set, sentences, sequences))
+                else:
+                    evidence_set = instance['evidence_set']
+                    data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
     else:
@@ -149,7 +192,8 @@ def train(args,
             
             batch_state, batch_actions = [], []
             for idx in idxs:
-                claim, label, evidence_set, sentences = train_data[idx]
+                claim, label, evidence_set, sentences, all_sequences = train_data[idx]
+                memory.push_sequence(key=label, sequences=all_sequences)
                 batch_state.append(
                     State(claim=claim,
                           label=label,
@@ -339,7 +383,8 @@ def run_dqn(args) -> None:
     if args.do_train:
         train_data = load_and_process_data(args,
                                            os.path.join(args.data_dir, 'train.jsonl'),
-                                           agent.token)
+                                           agent.token,
+                                           env_type=args.env)
         epochs_trained = 0
         acc_loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0
