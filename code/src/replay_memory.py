@@ -44,7 +44,7 @@ class ReplayMemory:
             self.sequences[key] = []
         self.sequences[key].extend(sequences)
 
-    def sample(self, batch_size: int, prob: float) -> List[Transition]:
+    def sample(self, batch_size: int) -> List[Transition]:
         batch = []
         if self.epsilon_greedy:
             batch += self.sample_from_sequences()[:batch_size]
