@@ -108,7 +108,7 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--tau', default=1., type=float)
 
     parser.add_argument('--env', default='DuEnv', choices=['DuEnv', 'ChenEnv'])
-    parser.add_argument('--mem', default='priority', choices=['random', 'priority'])
+    parser.add_argument('--mem', default='label_priority', choices=['random', 'priority', 'label_random', 'label_priority'])
 
 def set_bert_args(parser) -> None:
     from dqn.bert_dqn import MODEL_CLASSES

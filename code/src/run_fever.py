@@ -16,7 +16,7 @@ from collections import defaultdict
 
 from dqn.bert_dqn import BertDQN
 from environment import BaseEnv, DuEnv, ChenEnv
-from replay_memory import ReplayMemory, PrioritizedReplayMemory
+from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
 from config import set_com_args, set_dqn_args, set_bert_args
 
@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 Agent = BertDQN
 Env = {'DuEnv': DuEnv, 'ChenEnv': ChenEnv}
-Memory = {'random': ReplayMemory, 'priority': PrioritizedReplayMemory}
+Memory = {'random': ReplayMemory, 'priority': PrioritizedReplayMemory,
+          'label_random': ReplayMemoryWithLabel,
+          'label_priority': PrioritizedReplayMemoryWithLabel}
 
 DataSet = List[Tuple[Claim, int, Evidence, List[Sentence]]]
 
@@ -128,7 +130,10 @@ def train(args,
           losses_trained_in_current_epoch: List[float]=[]) -> None:
     logger.info('Training')
     env = Env[args.env](args.max_evi_size)
-    memory = Memory[args.mem](args.capacity) 
+    if args.mem.find('label') == -1:
+        memory = Memory[args.mem](args.capacity)
+    else:
+        memory = Memory[args.mem](args.capacity, args.num_labels)
     
     train_ids = list(range(len(train_data)))
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
@@ -179,11 +184,16 @@ def train(args,
                                             actions)) if selected_action.sentence is not None else []
                         if len(actions_next) == 0:
                             actions_next = [Action(sentence=None, label='F/T/N')]
-                    memory.push(Transition(state=state,
-                                           action=selected_action,
-                                           next_state=state_next,
-                                           reward=reward,
-                                           next_actions=actions_next))
+                    
+                    data = {'item': Transition(state=state,
+                                               action=selected_action,
+                                               next_state=state_next,
+                                               reward=reward,
+                                               next_actions=actions_next)}
+                    if args.mem.find('label') != -1:
+                        data['label'] = state.label
+                    memory.push(**data)
+                    
                     if done: continue
                     batch_state_next.append(state_next)
                     batch_actions_next.append(actions_next)
@@ -191,13 +201,13 @@ def train(args,
                 batch_actions = batch_actions_next
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
-                    if args.mem == 'priority':
+                    if args.mem.find('priority') != -1:
                         tree_idx, isweights, batch = memory.sample(args.train_batch_size)
                     else:
                         batch = memory.sample(args.train_batch_size)
                         isweights = None
                     loss = agent.update(batch, isweights)
-                    if args.mem == 'priority':
+                    if args.mem.find('priority') != -1:
                         memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()
                     t_loss += loss
