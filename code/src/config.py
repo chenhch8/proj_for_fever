@@ -142,6 +142,10 @@ def set_bert_args(parser) -> None:
         "--evaluate_during_training", action="store_true", help="Run evaluation during training at each logging step.",
     )
 
+    parser.add_argument(
+        "--num_layers_of_classifier", default=2, type=int
+    )
+
     #parser.add_argument(
     #    "--gradient_accumulation_steps",
     #    type=int,

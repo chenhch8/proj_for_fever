@@ -46,7 +46,7 @@ from transformers import (
     AlbertForSequenceClassification,
     AlbertTokenizer,
     BertConfig,
-    BertForSequenceClassification,
+#    BertForSequenceClassification,
     BertTokenizer,
     DistilBertConfig,
     DistilBertForSequenceClassification,
@@ -73,6 +73,7 @@ from transformers import glue_convert_examples_to_features as convert_examples_t
 from transformers import glue_output_modes as output_modes
 from transformers import glue_processors as processors
 
+from ..dqn.net import BertForSequenceClassification
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -423,6 +424,7 @@ def main():
                         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()))
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument("--num_layers_of_classifier", default=2, type=int)
 
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,

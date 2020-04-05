@@ -2,6 +2,7 @@
 # coding=utf-8
 import numpy as np
 import torch
+from torch.optim import Adam
 #from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 #from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
@@ -11,15 +12,16 @@ import pdb
 
 from .base_dqn import BaseDQN
 from data.structure import Action, State, Transition
+from copy import deepcopy
 
 from transformers import (
     WEIGHTS_NAME,
-    AdamW,
+#    AdamW,
     AlbertConfig,
     AlbertForSequenceClassification,
     AlbertTokenizer,
     BertConfig,
-    BertForSequenceClassification,
+#    BertForSequenceClassification,
     BertTokenizer,
     DistilBertConfig,
     DistilBertForSequenceClassification,
@@ -41,6 +43,8 @@ from transformers import (
     XLNetTokenizer,
     get_linear_schedule_with_warmup,
 )
+
+from .net import BertForSequenceClassification
 
 ALL_MODELS = sum(
     (
@@ -127,33 +131,39 @@ class BertDQN(BaseDQN):
             config=config,
             #cache_dir=args.cache_dir if args.cache_dir else None,
         )
-        # Target network
-        self.t_net = model_class.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            #cache_dir=args.cache_dir if args.cache_dir else None,
-        ) if args.do_train else self.q_net
         self.q_net.zero_grad()
-        self.set_network_untrainable(self.t_net)
+        # Target network
+        self.t_net_classifier = deecopy(self.q_net.classifier) if args.do_train else self.q_net.classifier
+        
+        self.set_network_untrainable(self.q_net.bert)
+        self.set_network_untrainable(self.t_net_classifier)
+        bert.eval()
+        classifier.eval()
+        
+        self.t_net = lambda **inputs: (self.t_net_classifier(bert(inputs)[0]),)
+
 
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
-        # Prepare optimizer and schedule (linear warmup and decay)
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in self.q_net.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": args.weight_decay,
-            },
-            {"params": [p for n, p in self.q_net.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-        ]
-
-        self.optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+        self.optimizer = Adam(self.q_net.classifier.parameters(), lr=args.learning_rate, betas=(0.9, 0.99))
         #scheduler = get_linear_schedule_with_warmup(
         #    self.optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
         #)
+
+   
+   def to(self, device):
+        self.q_net.to(device)
+        self.t_net_classifier.to(device)
+        # multi-gpu training (should be after apex fp16 initialization)
+        if self.args.n_gpu > 1:
+            self.q_net = torch.nn.DataParallel(self.q_net)
+   
+
+    def soft_update_of_target_network(self, tau: float=1.) -> None:
+        for target_param, local_param in zip(self.t_net_classifier.parameters(),
+                                             self.q_net.classifier.parameters()):
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
 
 
     def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:

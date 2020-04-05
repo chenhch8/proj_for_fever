@@ -63,7 +63,6 @@ class BaseDQN:
 
     def update(self, transitions: List[Transition], isweights: List[float]=None) -> float:
         self.q_net.train()
-        self.t_net.eval()
         
         batch = Transition(*zip(*transitions))
         
@@ -156,7 +155,7 @@ class BaseDQN:
         assert len(batch_state) == len(batch_actions)
         MAX_SIZE = 200 * 256
 
-        if is_eval: net.eval()
+        if is_eval and isinstance(net, torch.Module): net.eval()
 
         q_values = None
         with torch.no_grad():
@@ -225,7 +224,6 @@ class BaseDQN:
 
     def eval(self):
         self.q_net.eval()
-        self.t_net.eval()
 
 
     def soft_update_of_target_network(self, tau: float=1.) -> None:
