@@ -119,6 +119,7 @@ class BertDQN(BaseDQN):
             finetuning_task=args.task_name,
             #cache_dir=args.cache_dir if argsche_dir else None,
         )
+        config.num_layers_of_classifier = args.num_layers_of_classifier
         self.tokenizer = tokenizer_class.from_pretrained(
             args.model_name_or_path,
             do_lower_case=args.do_lower_case,
@@ -152,7 +153,7 @@ class BertDQN(BaseDQN):
         #)
 
    
-   def to(self, device):
+    def to(self, device):
         self.q_net.to(device)
         self.t_net_classifier.to(device)
         # multi-gpu training (should be after apex fp16 initialization)
