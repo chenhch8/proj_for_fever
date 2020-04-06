@@ -107,3 +107,62 @@ class PrioritizedReplayMemory(ReplayMemory):
 
     def _get_priority(self, error):
         return min(abs(error) + self.epsilon, self.abs_err_upper) ** self.alpha
+
+
+class ReplayMemoryWithLabel:
+    def __init__(self, capacity: int, num_labels: int=3) -> None:
+        capacity_per_label = capacity // num_labels
+        self.capacity = capacity_per_label * num_labels
+        self.num_labels = num_labels
+        self.replay_memories = [ReplayMemory(capacity_per_label) for _ in range(num_labels)]
+
+    def reset(self):
+        for replay_memory in self.replay_memories:
+            replay_memory.reset()
+
+    def push(self, label: int, item: Transition) -> None:
+        self.replay_memories[label].push(item)
+
+    def sample(self, batch_size: int) -> List[Transition]:
+        sizes = [batch_size // self.num_labels] * self.num_labels
+        sizes[0] = batch_size - sizes[0] * (self.num_labels - 1)
+        random.shuffle(sizes)
+        assert sum(sizes) == batch_size
+        
+        batch = []
+        for replay_memory, size in zip(self.replay_memories, sizes):
+            batch += replay_memory.sample(size)
+        random.shuffle(batch)
+
+        return batch
+    
+    def __len__(self):
+        return min([len(replay_memory) for replay_memory in self.replay_memories])
+
+
+class PrioritizedReplayMemoryWithLabel(ReplayMemoryWithLabel):
+    def __init__(self, capacity: int, num_labels: int=3) -> None:
+        super(PrioritizedReplayMemoryWithLabel, self).__init__(capacity, num_labels)
+        self.replay_memories = [PrioritizedReplayMemory(self.capacity // num_labels) \
+                                    for _ in range(num_labels)]
+
+    def sample(self, batch_size: int) -> Tuple[List[Tuple[int, int]], List[float], List[Transition]]:
+        sizes = [batch_size // self.num_labels] * self.num_labels
+        sizes[0] = batch_size - sizes[0] * (self.num_labels - 1)
+        random.shuffle(sizes)
+        assert sum(sizes) == batch_size
+        
+        idxs, isweights, batch = [], [], []
+        for label, (replay_memory, size) in enumerate(zip(self.replay_memories, sizes)):
+            _idxs, _isweights, _batch = replay_memory.sample(size)
+            idxs += list(zip([label] * len(_idxs), _idxs))
+            isweights += _isweights
+            batch += _batch
+        data = list(zip(idxs, isweights, batch))
+        random.shuffle(data)
+        
+        return tuple(zip(*data))
+    
+    def batch_update_sumtree(self, batch_idx: List[Tuple[int, int]], batch_value: List[float], is_error: bool=True) -> None:
+        for (label, idx), value in zip(batch_idx, batch_value):
+            self.replay_memories[label].update_sumtree(idx, value, is_error)
