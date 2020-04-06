@@ -18,12 +18,17 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 chain(
                     *[[nn.Dropout(config.hidden_dropout_prob), \
                        nn.Linear(config.hidden_size,
-                                 config.hidden_size if i < self.num_layers_of_classifier - 1 else self.num_labels)] \
-                      + [nn.ReLU()] if i < self.num_layers_of_classifier - 1 else []\
+                                 config.hidden_size), \
+                       nn.ReLU()] \
+                      if i < self.num_layers_of_classifier - 1 else \
+                      [nn.Dropout(config.hidden_dropout_prob), \
+                       nn.Linear(config.hidden_size,
+                                 config.num_labels)]
                       for i in range(self.num_layers_of_classifier)]
                 )
             )
         )
+        print(self.classifier)
 
         self.init_weights()
 

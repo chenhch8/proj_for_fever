@@ -134,15 +134,21 @@ class BertDQN(BaseDQN):
         )
         self.q_net.zero_grad()
         # Target network
-        self.t_net_classifier = deecopy(self.q_net.classifier) if args.do_train else self.q_net.classifier
-        
+        self.t_net_classifier = deepcopy(self.q_net.classifier) if args.do_train else self.q_net.classifier
         self.set_network_untrainable(self.q_net.bert)
         self.set_network_untrainable(self.t_net_classifier)
-        bert.eval()
-        classifier.eval()
         
-        self.t_net = lambda **inputs: (self.t_net_classifier(bert(inputs)[0]),)
-
+        self.t_net = lambda **inputs: (self.t_net_classifier(
+            self.q_net.bert(**inputs)[1].detach()
+            ),)
+        #self.t_net = model_class.from_pretrained(
+        #    args.model_name_or_path,
+        #    from_tf=bool(".ckpt" in args.model_name_or_path),
+        #    config=config,
+        #    #cache_dir=args.cache_dir if args.cache_dir else None,
+        #)
+        #self.set_network_untrainable(self.q_net.bert)
+        #self.set_network_untrainable(self.t_net)
 
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
