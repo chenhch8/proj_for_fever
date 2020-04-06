@@ -41,7 +41,7 @@ class BaseDQN:
     def set_network_untrainable(self, model) -> None:
         model.eval()
         for param in model.parameters():
-            param.requeires_grad = False
+            param.requires_grad = False
 
 
     def to(self, device):
@@ -154,7 +154,7 @@ class BaseDQN:
                       net: nn.Module,
                       is_eval: bool=False) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
-        MAX_SIZE = 200 * 256
+        MAX_SIZE = 256 * 256
 
         if is_eval: net.eval()
 
