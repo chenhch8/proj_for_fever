@@ -137,7 +137,7 @@ def train(args,
         if epochs_trained > 0:
             epochs_trained -= 1
             continue
-        epoch_iterator = tqdm([train_ids[i:i + 4] for i in range(0, len(train_ids), 4)],
+        epoch_iterator = tqdm([train_ids[i:i + 8] for i in range(0, len(train_ids), 8)],
                               desc='Loss',
                               disable=args.local_rank not in [-1, 0])
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
