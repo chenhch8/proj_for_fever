@@ -10,6 +10,7 @@ import pickle
 import random
 from typing import List, Tuple
 from tqdm import tqdm, trange
+from time import sleep
 from functools import reduce
 from collections import defaultdict
 #from multiprocessing import cpu_count, Pool
@@ -141,8 +142,9 @@ def train(args,
         random.shuffle(train_ids)
         if epochs_trained > 0:
             epochs_trained -= 1
+            sleep(0.1)
             continue
-        epoch_iterator = tqdm([train_ids[i:i + 4] for i in range(0, len(train_ids), 4)],
+        epoch_iterator = tqdm([train_ids[i:i + 8] for i in range(0, len(train_ids), 8)],
                               desc='Loss',
                               disable=args.local_rank not in [-1, 0])
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
@@ -150,6 +152,7 @@ def train(args,
         for step, idxs in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
+                sleep(0.1)
                 continue
             
             batch_state, batch_actions = [], []
