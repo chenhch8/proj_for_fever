@@ -155,7 +155,7 @@ class BaseDQN:
         assert len(batch_state) == len(batch_actions)
         MAX_SIZE = 256 * 256
 
-        if is_eval and isinstance(net, torch.Module): net.eval()
+        if is_eval and isinstance(net, torch.nn.Module): net.eval()
 
         q_values = None
         with torch.no_grad():
