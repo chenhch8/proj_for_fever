@@ -18,7 +18,7 @@ from transformers import (
     WEIGHTS_NAME,
 #    AdamW,
     AlbertConfig,
-    AlbertForSequenceClassification,
+#    AlbertForSequenceClassification,
     AlbertTokenizer,
     BertConfig,
 #    BertForSequenceClassification,
@@ -44,7 +44,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from .net import BertForSequenceClassification
+from .net import BertForSequenceClassification, AlbertForSequenceClassification
 
 ALL_MODELS = sum(
     (
@@ -154,7 +154,7 @@ class BertDQN(BaseDQN):
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
-        self.optimizer = Adam(self.q_net.classifier.parameters(), lr=args.learning_rate, betas=(0.9, 0.99))
+        self.optimizer = Adam(classifier.parameters(), lr=args.learning_rate, betas=(0.9, 0.99))
         #scheduler = get_linear_schedule_with_warmup(
         #    self.optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
         #)
