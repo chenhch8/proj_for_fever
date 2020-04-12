@@ -133,14 +133,15 @@ class BertDQN(BaseDQN):
             #cache_dir=args.cache_dir if args.cache_dir else None,
         )
         self.q_net.zero_grad()
+        # get module from q_net
+        encoder = getattr(self.q_net, args.model_type)
+        classifier = getattr(self.q_net, 'classifier')
         # Target network
-        self.t_net_classifier = deepcopy(self.q_net.classifier) if args.do_train else self.q_net.classifier
-        self.set_network_untrainable(self.q_net.bert)
+        self.t_net_classifier = deepcopy(classifier) if args.do_train else classifier
+        self.set_network_untrainable(encoder)
         self.set_network_untrainable(self.t_net_classifier)
         
-        self.t_net = lambda **inputs: (self.t_net_classifier(
-            self.q_net.bert(**inputs)[1].detach()
-            ),)
+        self.t_net = lambda **inputs: (self.t_net_classifier(encoder(**inputs)[1].detach()),)
         #self.t_net = model_class.from_pretrained(
         #    args.model_name_or_path,
         #    from_tf=bool(".ckpt" in args.model_name_or_path),
