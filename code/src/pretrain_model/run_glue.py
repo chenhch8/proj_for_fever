@@ -43,7 +43,7 @@ from transformers import (
     WEIGHTS_NAME,
     AdamW,
     AlbertConfig,
-    AlbertForSequenceClassification,
+#    AlbertForSequenceClassification,
     AlbertTokenizer,
     BertConfig,
 #    BertForSequenceClassification,
@@ -73,7 +73,7 @@ from transformers import glue_convert_examples_to_features as convert_examples_t
 from transformers import glue_output_modes as output_modes
 from transformers import glue_processors as processors
 
-from net import BertForSequenceClassification
+from net import BertForSequenceClassification, AlbertForSequenceClassification
 
 try:
     from torch.utils.tensorboard import SummaryWriter
