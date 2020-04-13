@@ -27,7 +27,7 @@ from collections import defaultdict
 import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset)
+                              WeightedRandomSampler, TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
 
 import pdb
@@ -126,13 +126,25 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-def train(args, train_dataset, model, tokenizer):
+def weights(labels):
+    nclass = np.zeros(labels.max() + 1, dtype=np.float)
+    for label in labels:
+        nclass[label] += 1
+    nclass = nclass.clip(min=1)
+    weights_for_class = nclass.sum() / nclass
+    logger.info('weights_for_class: %s' % weights_for_class)
+    return weights_for_class[labels]
+
+
+def train(args, train_dataset, train_labels, model, tokenizer):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter(logdir=os.path.join(args.output_dir, 'runs'))
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    #train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    train_sampler = WeightedRandomSampler(weights(train_labels), len(train_dataset)) \
+            if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=1)
 
     if args.max_steps > 0:
@@ -142,21 +154,20 @@ def train(args, train_dataset, model, tokenizer):
         t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
 
     # Prepare optimizer and schedule (linear warmup and decay)
-    #no_decay = ["bias", "LayerNorm.weight"]
-    #optimizer_grouped_parameters = [
-    #    {
-    #        "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-    #        "weight_decay": args.weight_decay,
-    #    },
-    #    {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    #]
-
-    #optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    encoder = getattr(model, args.model_type)
-    classifier = getattr(model, 'classifier')
-    for param in encoder.parameters():
-        param.requires_grad = False
-    optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": args.weight_decay,
+        },
+        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+    ]
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    #encoder = getattr(model, args.model_type)
+    #classifier = getattr(model, 'classifier')
+    #for param in encoder.parameters():
+    #    param.requires_grad = False
+    #optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
@@ -327,7 +338,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
         #pdb.set_trace()
-        eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, evaluate=True)
+        eval_dataset, _ = load_and_cache_examples(args, eval_task, tokenizer, evaluate=True)
 
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
@@ -455,7 +466,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         all_labels = torch.tensor([f.label for f in features], dtype=torch.float)
 
     dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels)
-    return dataset
+    return dataset, all_labels
 
 
 def main():
@@ -629,8 +640,8 @@ def main():
 
     # Training
     if args.do_train:
-        train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
+        train_dataset, train_labels = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
+        global_step, tr_loss = train(args, train_dataset, train_labels, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
