@@ -230,7 +230,15 @@ def train(args, train_dataset, model, tokenizer):
                 inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
-
+            
+            if step % 50 == 0:
+                y = inputs['labels']
+                y_hat = outputs[1].argmax(dim=1).view(-1)
+                acc = (y == y_hat).sum().float() / y.size(0)
+                inds = np.random.randint(0, y.size(0) + 1, size=min(5, y.size(0)))
+                logger.info(f'accuracy: {acc.item()}')
+                logger.info(inputs['labels'][inds])
+                logger.info(outputs[1].cpu().data[inds])
             #pdb.set_trace()
 
             if args.n_gpu > 1:
