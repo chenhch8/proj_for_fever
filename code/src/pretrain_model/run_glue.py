@@ -152,21 +152,21 @@ def train(args, train_dataset, train_labels, model, tokenizer):
         t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
 
     # Prepare optimizer and schedule (linear warmup and decay)
-    #no_decay = ["bias", "LayerNorm.weight"]
-    #optimizer_grouped_parameters = [
-    #    {
-    #        "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-    #        "weight_decay": args.weight_decay,
-    #    },
-    #    {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    #]
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": args.weight_decay,
+        },
+        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+    ]
 
-    #optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    encoder = getattr(model, args.model_type)
-    classifier = getattr(model, 'classifier')
-    for param in encoder.parameters():
-        param.requires_grad = False
-    optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    #encoder = getattr(model, args.model_type)
+    #classifier = getattr(model, 'classifier')
+    #for param in encoder.parameters():
+    #    param.requires_grad = False
+    #optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
@@ -246,6 +246,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
                 y_hat = outputs[1].argmax(dim=1).view(-1)
                 acc = (y == y_hat).sum().float() / y.size(0)
                 inds = np.random.randint(0, y.size(0) + 1, size=min(5, y.size(0)))
+                inds = torch.tensor(inds, dtype=torch.long, device=args.device)
                 logger.info(f'accuracy: {acc.item()}')
                 logger.info(inputs['labels'][inds])
                 logger.info(outputs[1].cpu().data[inds])
