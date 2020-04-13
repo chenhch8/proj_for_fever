@@ -155,6 +155,13 @@ def train(args, train_dataset, model, tokenizer):
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
 
+    # Check if saved optimizer or scheduler states exist
+    if os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt")) and os.path.isfile(
+                os.path.join(args.model_name_or_path, "scheduler.pt")):
+        # Load in optimizer and scheduler states
+        optimizer.load_state_dict(torch.load(os.path.join(args.model_name_or_path, "optimizer.pt")))
+        scheduler.load_state_dict(torch.load(os.path.join(args.model_name_or_path, "scheduler.pt")))
+
     if args.fp16:
         try:
             from apex import amp
@@ -183,6 +190,20 @@ def train(args, train_dataset, model, tokenizer):
     logger.info("  Total optimization steps = %d", t_total)
 
     global_step = 0
+    epochs_trained = 0
+    steps_trained_in_current_epoch = 0
+    # Check if continuing training from a checkpoint
+    if os.path.exists(args.model_name_or_path):
+        # set global_step to gobal_step of last saved checkpoint from model path
+        global_step = int(args.model_name_or_path.split("-")[-1].split("/")[0])
+        epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
+        steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
+
+        logger.info("  Continuing training from checkpoint, will skip to saved global_step")
+        logger.info("  Continuing training from epoch %d", epochs_trained)
+        logger.info("  Continuing training from global step %d", global_step)
+        logger.info("  Will skip the first %d steps in the first epoch", steps_trained_in_current_epoch)
+
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
@@ -190,6 +211,10 @@ def train(args, train_dataset, model, tokenizer):
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
+            # Skip past any already trained steps if resuming training
+            if steps_trained_in_current_epoch > 0:
+                steps_trained_in_current_epoch -= 1
+                continue
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
             inputs = {'input_ids':      batch[0],
@@ -240,8 +265,14 @@ def train(args, train_dataset, model, tokenizer):
                         os.makedirs(output_dir)
                     model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
                     model_to_save.save_pretrained(output_dir)
+                    tokenizer.save_pretrained(output_dir)
+
                     torch.save(args, os.path.join(output_dir, 'training_args.bin'))
                     logger.info("Saving model checkpoint to %s", output_dir)
+
+                    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+                    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+                    logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
             if args.tpu:
                 args.xla_model.optimizer_step(optimizer, barrier=True)
@@ -260,8 +291,14 @@ def train(args, train_dataset, model, tokenizer):
             os.makedirs(output_dir)
         model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
         model_to_save.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+
         torch.save(args, os.path.join(output_dir, 'training_args.bin'))
         logger.info("Saving model checkpoint to %s", output_dir)
+
+        torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+        torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+        logger.info("Saving optimizer and scheduler states to %s", output_dir)
         
         with torch.no_grad():
             evaluate(args, model, tokenizer)
@@ -360,12 +397,14 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
+    bert_type = args.config_name if args.config_name else args.model_name_or_path
+
     processor = processors[task]()
     output_mode = output_modes[task]
     # Load data features from cache or dataset file
     cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
         'dev' if evaluate else 'train',
-        list(filter(None, args.model_name_or_path.split('/'))).pop(),
+        list(filter(None, bert_type.split('/'))).pop(),
         str(args.max_seq_length),
         str(task)))
     global label_list
