@@ -18,12 +18,12 @@ class BertForSequenceClassification(BertPreTrainedModel):
         self.classifier = nn.Sequential(
             *list(
                 chain(
-                    *[[nn.Dropout(config.hidden_dropout_prob), \
+                    *[[nn.Dropout(max(config.hidden_dropout_prob, 0.1)), \
                        nn.Linear(config.hidden_size,
                                  config.hidden_size), \
                        nn.ReLU()] \
                       if i < self.num_layers_of_classifier - 1 else \
-                      [nn.Dropout(config.hidden_dropout_prob), \
+                      [nn.Dropout(max(config.hidden_dropout_prob, 0.1)), \
                        nn.Linear(config.hidden_size,
                                  config.num_labels)]
                       for i in range(self.num_layers_of_classifier)]
@@ -79,12 +79,12 @@ class AlbertForSequenceClassification(AlbertPreTrainedModel):
         self.classifier = nn.Sequential(
             *list(
                 chain(
-                    *[[nn.Dropout(config.hidden_dropout_prob), \
+                    *[[nn.Dropout(max(config.hidden_dropout_prob, 0.1)), \
                        nn.Linear(config.hidden_size,
                                  config.hidden_size), \
                        nn.ReLU()] \
                       if i < self.num_layers_of_classifier - 1 else \
-                      [nn.Dropout(config.hidden_dropout_prob), \
+                      [nn.Dropout(max(config.hidden_dropout_prob, 0.1)), \
                        nn.Linear(config.hidden_size,
                                  config.num_labels)]
                       for i in range(self.num_layers_of_classifier)]

@@ -241,6 +241,8 @@ def train(args, train_dataset, model, tokenizer):
                 logger.info(outputs[1].cpu().data[inds])
             #pdb.set_trace()
 
+            #pdb.set_trace()
+
             if args.n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu parallel training
             if args.gradient_accumulation_steps > 1:
