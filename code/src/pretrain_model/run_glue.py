@@ -242,14 +242,14 @@ def train(args, train_dataset, train_labels, model, tokenizer):
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
             
-            if step % 50 == 0:
+            if step % 100 == 0:
                 y = inputs['labels']
                 y_hat = outputs[1].argmax(dim=1).view(-1)
                 acc = (y == y_hat).sum().float() / y.size(0)
-                inds = np.random.randint(0, y.size(0) + 1, size=min(5, y.size(0)))
-                inds = torch.tensor(inds, dtype=torch.long, device=args.device)
+                inds = np.random.randint(0, y.size(0), size=min(10, y.size(0)))
+                #inds = torch.tensor(inds, dtype=torch.long, device=args.device)
                 logger.info(f'accuracy: {acc.item()}')
-                logger.info(inputs['labels'][inds])
+                logger.info(inputs['labels'].cpu().data[inds])
                 logger.info(outputs[1].cpu().data[inds])
             #pdb.set_trace()
 
