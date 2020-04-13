@@ -322,8 +322,8 @@ def train(args, train_dataset, train_labels, model, tokenizer):
         
         if steps_trained_in_current_epoch != 0: continue
 
-        #with torch.no_grad():
-        #    evaluate(args, model, tokenizer)
+        with torch.no_grad():
+            evaluate(args, model, tokenizer)
 
     if args.local_rank in [-1, 0]:
         tb_writer.close()
