@@ -194,11 +194,11 @@ def train(args, train_dataset, model, tokenizer):
     epochs_trained = 0
     steps_trained_in_current_epoch = 0
     # Check if continuing training from a checkpoint
-    if os.path.exists(args.model_name_or_path):
+    if os.path.exists(args.model_name_or_path) and args.model_name_or_path != args.tokenizer_name:
         # set global_step to gobal_step of last saved checkpoint from model path
         global_step = int(args.model_name_or_path.split("-")[-1].split("/")[0])
         epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
-        steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
+        steps_trained_in_current_epoch = global_step * args.gradient_accumulation_steps
 
         logger.info("  Continuing training from checkpoint, will skip to saved global_step")
         logger.info("  Continuing training from epoch %d", epochs_trained)
@@ -226,6 +226,8 @@ def train(args, train_dataset, model, tokenizer):
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
+            #pdb.set_trace()
+
             if args.n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu parallel training
             if args.gradient_accumulation_steps > 1:
@@ -245,8 +247,12 @@ def train(args, train_dataset, model, tokenizer):
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
+                
+                loss = loss.cpu().item()
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss * args.gradient_accumulation_steps
 
-                epoch_iterator.set_description("Iteration Loss: %.5f" % loss.cpu().item())
+                epoch_iterator.set_description("Iteration Loss: %.5f" % loss)
                 epoch_iterator.refresh()
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
@@ -259,7 +265,7 @@ def train(args, train_dataset, model, tokenizer):
                     tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
                     logging_loss = tr_loss
 
-                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0 or step == len(epoch_iterator) - 1:
                     # Save model checkpoint
                     output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
                     if not os.path.exists(output_dir):
@@ -286,23 +292,11 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
-
-        output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-        model_to_save.save_pretrained(output_dir)
-        tokenizer.save_pretrained(output_dir)
-
-        torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-        logger.info("Saving model checkpoint to %s", output_dir)
-
-        torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-        torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
-        logger.info("Saving optimizer and scheduler states to %s", output_dir)
         
-        with torch.no_grad():
-            evaluate(args, model, tokenizer)
+        if steps_trained_in_current_epoch != 0: continue
+
+        #with torch.no_grad():
+        #    evaluate(args, model, tokenizer)
 
     if args.local_rank in [-1, 0]:
         tb_writer.close()
