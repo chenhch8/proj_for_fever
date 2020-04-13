@@ -173,11 +173,19 @@ class BaseDQN:
         for state, actions in zip(batch_state, batch_actions):
             cur_q_values = q_values[offset:offset + len(actions)]
             if self.epsilon_greedy or is_eval:
-                max_action = cur_q_values.argmax().item()
-                sent_id = max_action // self.args.num_labels
-                label_id = max_action % self.args.num_labels
+                TF_q = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
+                N_q = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
+                comp = TF_q < N_q
+                if torch.prod(comp):
+                    max_action = cur_q_values.argmax().item()
+                    sent_id = max_action // self.args.num_labels
+                    label_id = max_action % self.args.num_labels
+                else:
+                    indics = (~comp).sum(dim=1).nonzero().view(-1)
+                    max_action = cur_q_values[indics].argmax().item()
+                    sent_id = indics[max_action // self.args.num_labels].item()
+                    label_id = max_action % self.args.num_labels
             else:
-                #pdb.set_trace()
                 sent_id = random.randint(0, max(0, len(actions) - 1))
                 label_id = random.randint(0, self.args.num_labels - 1)
             
