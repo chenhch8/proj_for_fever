@@ -13,8 +13,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         self.num_labels = config.num_labels
         self.num_layers_of_classifier = config.num_layers_of_classifier
 
-        self.albert = BertModel(config)
-        self.bert = self.albert
+        self.bert = BertModel(config)
         self.classifier = nn.Sequential(
             *list(
                 chain(
