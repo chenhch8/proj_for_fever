@@ -27,7 +27,7 @@ from collections import defaultdict
 import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset)
+                              WeightedRandomSampler, TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
 
 import pdb
@@ -72,7 +72,6 @@ from transformers import glue_compute_metrics as compute_metrics
 from transformers import glue_convert_examples_to_features as convert_examples_to_features
 from transformers import glue_output_modes as output_modes
 from transformers import glue_processors as processors
-
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -125,13 +124,25 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-def train(args, train_dataset, model, tokenizer):
+def weights(labels):
+    nclass = np.zeros(labels.max() + 1, dtype=np.float)
+    for label in labels:
+        nclass[label] += 1
+    nclass = nclass.clip(min=1)
+    weights_for_class = nclass.sum() / nclass
+    logger.info('weights_for_class: %s' % weights_for_class)
+    return weights_for_class[labels]
+
+
+def train(args, train_dataset, train_labels, model, tokenizer):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter(logdir=os.path.join(args.output_dir, 'runs'))
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    #train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    train_sampler = WeightedRandomSampler(weights(train_labels), len(train_dataset)) \
+            if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=1)
 
     if args.max_steps > 0:
@@ -141,16 +152,21 @@ def train(args, train_dataset, model, tokenizer):
         t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
 
     # Prepare optimizer and schedule (linear warmup and decay)
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": args.weight_decay,
-        },
-        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    ]
+    #no_decay = ["bias", "LayerNorm.weight"]
+    #optimizer_grouped_parameters = [
+    #    {
+    #        "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+    #        "weight_decay": args.weight_decay,
+    #    },
+    #    {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+    #]
 
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    #optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    encoder = getattr(model, args.model_type)
+    classifier = getattr(model, 'classifier')
+    for param in encoder.parameters():
+        param.requires_grad = False
+    optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
@@ -193,11 +209,11 @@ def train(args, train_dataset, model, tokenizer):
     epochs_trained = 0
     steps_trained_in_current_epoch = 0
     # Check if continuing training from a checkpoint
-    if os.path.exists(args.model_name_or_path):
+    if os.path.exists(args.model_name_or_path) and args.model_name_or_path != args.tokenizer_name:
         # set global_step to gobal_step of last saved checkpoint from model path
         global_step = int(args.model_name_or_path.split("-")[-1].split("/")[0])
         epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
-        steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
+        steps_trained_in_current_epoch = global_step * args.gradient_accumulation_steps
 
         logger.info("  Continuing training from checkpoint, will skip to saved global_step")
         logger.info("  Continuing training from epoch %d", epochs_trained)
@@ -224,6 +240,18 @@ def train(args, train_dataset, model, tokenizer):
                 inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+            
+            if step % 50 == 0:
+                y = inputs['labels']
+                y_hat = outputs[1].argmax(dim=1).view(-1)
+                acc = (y == y_hat).sum().float() / y.size(0)
+                inds = np.random.randint(0, y.size(0) + 1, size=min(5, y.size(0)))
+                logger.info(f'accuracy: {acc.item()}')
+                logger.info(inputs['labels'][inds])
+                logger.info(outputs[1].cpu().data[inds])
+            #pdb.set_trace()
+
+            #pdb.set_trace()
 
             if args.n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu parallel training
@@ -244,8 +272,12 @@ def train(args, train_dataset, model, tokenizer):
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
+                
+                loss = loss.cpu().item()
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss * args.gradient_accumulation_steps
 
-                epoch_iterator.set_description("Iteration Loss: %.5f" % loss.cpu().item())
+                epoch_iterator.set_description("Iteration Loss: %.5f" % loss)
                 epoch_iterator.refresh()
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
@@ -258,7 +290,7 @@ def train(args, train_dataset, model, tokenizer):
                     tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
                     logging_loss = tr_loss
 
-                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0 or step == len(epoch_iterator) - 1:
                     # Save model checkpoint
                     output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
                     if not os.path.exists(output_dir):
@@ -285,23 +317,11 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
-
-        output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-        model_to_save.save_pretrained(output_dir)
-        tokenizer.save_pretrained(output_dir)
-
-        torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-        logger.info("Saving model checkpoint to %s", output_dir)
-
-        torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-        torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
-        logger.info("Saving optimizer and scheduler states to %s", output_dir)
         
-        with torch.no_grad():
-            evaluate(args, model, tokenizer)
+        if steps_trained_in_current_epoch != 0: continue
+
+        #with torch.no_grad():
+        #    evaluate(args, model, tokenizer)
 
     if args.local_rank in [-1, 0]:
         tb_writer.close()
@@ -317,7 +337,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
         #pdb.set_trace()
-        eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, evaluate=True)
+        eval_dataset, _ = load_and_cache_examples(args, eval_task, tokenizer, evaluate=True)
 
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
@@ -445,7 +465,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         all_labels = torch.tensor([f.label for f in features], dtype=torch.float)
 
     dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels)
-    return dataset
+    return dataset, all_labels
 
 
 def main():
@@ -462,6 +482,7 @@ def main():
                         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()))
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument("--num_layers_of_classifier", default=2, type=int)
 
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,
@@ -604,6 +625,7 @@ def main():
     args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
+    config.num_layers_of_classifier = args.num_layers_of_classifier
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
 
@@ -617,8 +639,8 @@ def main():
 
     # Training
     if args.do_train:
-        train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
+        train_dataset, train_labels = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
+        global_step, tr_loss = train(args, train_dataset, train_labels, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
