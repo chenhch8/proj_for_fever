@@ -250,7 +250,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
                 acc = (y == y_hat).sum().float() / y.size(0)
                 log = f'Acc: {acc.item()} ('
                 for label in range(3):
-                    inds = (y == label).nozero().view(-1)
+                    inds = (y == label).nonzero().view(-1)
                     if not inds.size(0): continue
                     acc = (y[inds] == y_hat[inds]).sum().float() / inds.size(0)
                     log += f'{label_list[label]}-{acc.item()}'
