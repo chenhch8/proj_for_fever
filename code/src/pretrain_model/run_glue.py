@@ -29,6 +29,7 @@ import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               WeightedRandomSampler, TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
+from torch.optim import SGD
 
 import pdb
 
@@ -163,22 +164,30 @@ def train(args, train_dataset, train_labels, model, tokenizer):
     #    {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
     #]
     #optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    #encoder = getattr(model, args.model_type)
+    #classifier = getattr(model, 'classifier')
+    #for param in encoder.parameters():
+    #    param.requires_grad = False
+    #optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
+    
     encoder = getattr(model, args.model_type)
     classifier = getattr(model, 'classifier')
-    for param in encoder.parameters():
-        param.requires_grad = False
-    optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
-    )
-    logger.info(classifier)
+    optimizer = SGD([
+        {'params': encoder.parameters()},
+        {'params': classifier.parameters(), 'lr': args.learning_rate * 10}
+    ], lr=args.learning_rate, momentum=0.9)
+
+    #scheduler = get_linear_schedule_with_warmup(
+    #    optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
+    #)
+    
 
     # Check if saved optimizer or scheduler states exist
     if os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt")) and os.path.isfile(
                 os.path.join(args.model_name_or_path, "scheduler.pt")):
         # Load in optimizer and scheduler states
         optimizer.load_state_dict(torch.load(os.path.join(args.model_name_or_path, "optimizer.pt")))
-        scheduler.load_state_dict(torch.load(os.path.join(args.model_name_or_path, "scheduler.pt")))
+        #scheduler.load_state_dict(torch.load(os.path.join(args.model_name_or_path, "scheduler.pt")))
 
     if args.fp16:
         try:
@@ -226,6 +235,8 @@ def train(args, train_dataset, train_labels, model, tokenizer):
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
+    log_per_steps = len(train_dataloader) // 5
+    logger.info(f'log_per_steps: {log_per_steps}')
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
@@ -243,7 +254,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
             
-            if step % 100 == 0:
+            if step % log_per_steps == 0:
                 y = inputs['labels']
                 y_hat = outputs[1].argmax(dim=1).view(-1)
                 
@@ -281,7 +292,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0 and not args.tpu:
                 optimizer.step()
-                scheduler.step()  # Update learning rate schedule
+                #scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
                 
@@ -298,7 +309,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
                         results = evaluate(args, model, tokenizer)
                         for key, value in results.items():
                             tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
-                    tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
+                    #tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
                     tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
                     logging_loss = tr_loss
 
@@ -315,7 +326,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
                     logger.info("Saving model checkpoint to %s", output_dir)
 
                     torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-                    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+                    #torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                     logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
             if args.tpu:

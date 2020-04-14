@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 # coding=utf-8
+import pdb
+from itertools import chain
+
 import torch
 from torch import nn
 from transformers import BertModel, BertPreTrainedModel, AlbertModel, AlbertPreTrainedModel
+import numpy as np
 
-from itertools import chain
 
+def weights_init(module):
+    if isinstance(module, nn.Linear):
+        n = module.in_features
+        y = 2. / np.sqrt(n)
+        module.weight.data.uniform_(-y, y)
+        module.bias.data.fill_(0)
 
 class BertForSequenceClassification(BertPreTrainedModel):
     def __init__(self, config):
@@ -32,6 +41,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         print(self.classifier)
 
         self.init_weights()
+        self.classifier.apply(weights_init)
 
     def forward(
                 self,
@@ -93,6 +103,7 @@ class AlbertForSequenceClassification(AlbertPreTrainedModel):
         print(self.classifier)
 
         self.init_weights()
+        self.classifier.apply(weights_init)
 
     def forward(
                 self,
