@@ -154,23 +154,24 @@ def train(args, train_dataset, train_labels, model, tokenizer):
         t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
 
     # Prepare optimizer and schedule (linear warmup and decay)
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": args.weight_decay,
-        },
-        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    #encoder = getattr(model, args.model_type)
-    #classifier = getattr(model, 'classifier')
-    #for param in encoder.parameters():
-    #    param.requires_grad = False
-    #optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
+    #no_decay = ["bias", "LayerNorm.weight"]
+    #optimizer_grouped_parameters = [
+    #    {
+    #        "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+    #        "weight_decay": args.weight_decay,
+    #    },
+    #    {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+    #]
+    #optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    encoder = getattr(model, args.model_type)
+    classifier = getattr(model, 'classifier')
+    for param in encoder.parameters():
+        param.requires_grad = False
+    optimizer = AdamW(classifier.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
+    logger.info(classifier)
 
     # Check if saved optimizer or scheduler states exist
     if os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt")) and os.path.isfile(
