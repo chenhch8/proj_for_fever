@@ -245,9 +245,19 @@ def train(args, train_dataset, train_labels, model, tokenizer):
             if step % 50 == 0:
                 y = inputs['labels']
                 y_hat = outputs[1].argmax(dim=1).view(-1)
+                
                 acc = (y == y_hat).sum().float() / y.size(0)
+                log = f'Acc: {acc.item()} ('
+                for label in range(3):
+                    inds = (y == label).nozero().view(-1)
+                    if not inds.size(0): continue
+                    acc = (y[inds] == y_hat[inds]).sum().float() / inds.size(0)
+                    log += f'{label_list[label]}-{acc.item()}'
+                    if label != 2: log += ' / '
+                log += ')'
+                logger.info(log)
+                
                 inds = np.random.randint(0, y.size(0), size=min(10, y.size(0)))
-                logger.info(f'accuracy: {acc.item()}')
                 logger.info(inputs['labels'].cpu().data[inds])
                 logger.info(outputs[1].cpu().data[inds])
             #pdb.set_trace()
