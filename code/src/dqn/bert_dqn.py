@@ -14,7 +14,7 @@ from data.structure import Action, State, Transition
 
 from transformers import (
     WEIGHTS_NAME,
-    AdamW,
+    #AdamW,
     AlbertConfig,
     AlbertForSequenceClassification,
     AlbertTokenizer,
@@ -41,6 +41,7 @@ from transformers import (
     XLNetTokenizer,
     get_linear_schedule_with_warmup,
 )
+from torch.optim import SGD
 
 ALL_MODELS = sum(
     (
@@ -140,20 +141,26 @@ class BertDQN(BaseDQN):
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
-        # Prepare optimizer and schedule (linear warmup and decay)
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in self.q_net.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": args.weight_decay,
-            },
-            {"params": [p for n, p in self.q_net.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-        ]
+        ## Prepare optimizer and schedule (linear warmup and decay)
+        #no_decay = ["bias", "LayerNorm.weight"]
+        #optimizer_grouped_parameters = [
+        #    {
+        #        "params": [p for n, p in self.q_net.named_parameters() if not any(nd in n for nd in no_decay)],
+        #        "weight_decay": args.weight_decay,
+        #    },
+        #    {"params": [p for n, p in self.q_net.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+        #]
 
-        self.optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-        #scheduler = get_linear_schedule_with_warmup(
-        #    self.optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
-        #)
+        #self.optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+        ##scheduler = get_linear_schedule_with_warmup(
+        ##    self.optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
+        ##)
+        encoder = getattr(self.q_net, args.model_type)
+        classifier = getattr(self.q_net, 'classifier')
+        self.optimizer = SGD([
+            {'params': encoder.parameters()},
+            {'params': classifier.parameters(), 'lr': args.learning_rate * 10}
+        ], lr=args.learning_rate, momentum=0.9)
 
 
     def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
