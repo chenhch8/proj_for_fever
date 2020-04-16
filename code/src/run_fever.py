@@ -180,7 +180,6 @@ def train(args,
         random.shuffle(train_ids)
         if epochs_trained > 0:
             epochs_trained -= 1
-            sleep(0.1)
             continue
         epoch_iterator = tqdm([train_ids[i:i + 8] for i in range(0, len(train_ids), 8)],
                               desc='Loss',
@@ -190,7 +189,6 @@ def train(args,
         for step, idxs in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
-                sleep(0.1)
                 continue
             
             batch_state, batch_actions = [], []
