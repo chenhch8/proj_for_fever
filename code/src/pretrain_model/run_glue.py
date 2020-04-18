@@ -126,6 +126,7 @@ def set_seed(args):
 
 
 def train(args, train_dataset, model, tokenizer):
+    global label_list
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter(logdir=os.path.join(args.output_dir, 'runs'))
@@ -186,6 +187,7 @@ def train(args, train_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
+    log_per_steps = len(train_dataloader) // 5
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
@@ -200,6 +202,25 @@ def train(args, train_dataset, model, tokenizer):
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
+            if step % log_per_steps == 0:
+                y = inputs['labels']
+                y_hat = outputs[1].argmax(dim=1).view(-1)
+                
+                acc = (y == y_hat).sum().float() / y.size(0)
+                log = f'Acc: {acc.item()} ('
+                for label in range(3):
+                    inds = (y == label).nonzero().view(-1)
+                    if not inds.size(0): continue
+                    acc = (y[inds] == y_hat[inds]).sum().float() / inds.size(0)
+                    log += f'{label_list[label]}-{acc.item()}'
+                    if label != 2: log += ' / '
+                log += ')'
+                logger.info(log)
+                
+                inds = np.random.randint(0, y.size(0), size=min(10, y.size(0)))
+                logger.info(inputs['labels'].cpu().data[inds])
+                logger.info(outputs[1].cpu().data[inds])
+                
             if args.n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu parallel training
             if args.gradient_accumulation_steps > 1:
@@ -440,7 +461,8 @@ def main():
                         help="Whether to run eval on the dev set.")
     parser.add_argument("--evaluate_during_training", action='store_true',
                         help="Rul evaluation during training at each logging step.")
-    parser.add_argument("--do_lower_case", action='store_true',
+    #parser.add_argument("--do_lower_case", action='store_true',
+    parser.add_argument("--do_lower_case", type=int, choices=[0, 1],
                         help="Set this flag if you are using an uncased model.")
 
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int,
@@ -498,6 +520,7 @@ def main():
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     args = parser.parse_args()
+    args.do_lower_case = bool(args.do_lower_case)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))

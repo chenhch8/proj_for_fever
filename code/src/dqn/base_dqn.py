@@ -154,7 +154,7 @@ class BaseDQN:
                       net: nn.Module,
                       is_eval: bool=False) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
-        MAX_SIZE = 256 * 256
+        MAX_SIZE = 200 * 256
 
         if is_eval: net.eval()
 
