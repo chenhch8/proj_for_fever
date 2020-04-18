@@ -440,7 +440,8 @@ def main():
                         help="Whether to run eval on the dev set.")
     parser.add_argument("--evaluate_during_training", action='store_true',
                         help="Rul evaluation during training at each logging step.")
-    parser.add_argument("--do_lower_case", action='store_true',
+    #parser.add_argument("--do_lower_case", action='store_true',
+    parser.add_argument("--do_lower_case", type=bool, choices=[True, False],
                         help="Set this flag if you are using an uncased model.")
 
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int,
