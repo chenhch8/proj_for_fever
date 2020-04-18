@@ -441,7 +441,7 @@ def main():
     parser.add_argument("--evaluate_during_training", action='store_true',
                         help="Rul evaluation during training at each logging step.")
     #parser.add_argument("--do_lower_case", action='store_true',
-    parser.add_argument("--do_lower_case", type=bool, choices=[True, False],
+    parser.add_argument("--do_lower_case", type=int, choices=[0, 1],
                         help="Set this flag if you are using an uncased model.")
 
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int,
@@ -499,6 +499,7 @@ def main():
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     args = parser.parse_args()
+    args.do_lower_case = bool(args.do_lower_case)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
