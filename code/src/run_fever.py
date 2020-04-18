@@ -386,6 +386,7 @@ def main() -> None:
         'REFUTES': 0
     }
     args.id2label = ['REFUTES', 'SUPPORTS', 'NOT ENOUGH INFO']
+    args.do_lower_case = bool(args.do_lower_case)
     logger.info(vars(args))
 
     if (
