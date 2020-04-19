@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # coding=utf-8
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import random
 import math
 import os
-
 import pdb
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 
 from collections import defaultdict
 from typing import List, Tuple
@@ -61,7 +62,7 @@ class BaseDQN:
             )
 
 
-    def update(self, transitions: List[Transition], isweights: List[float]=None) -> float:
+    def update(self, transitions: List[Transition], isweights: List[float]=None, log=False) -> float:
         self.q_net.train()
         self.t_net.eval()
         
@@ -111,11 +112,34 @@ class BaseDQN:
         labels = torch.tensor([action.label if state_next != None else state.pred_label \
                                 for state, action, state_next in zip(batch.state, batch.action, batch.next_state)],
                                dtype=torch.long, device=self.device).view(-1, 1)
-        state_action_values = self.q_net(
-            **self.convert_to_inputs_for_update(batch.state, batch.action)
-        )[0].gather(dim=1, index=labels).view(-1)
-        del labels
-        
+        #state_action_values = self.q_net(
+        #    **self.convert_to_inputs_for_update(batch.state, batch.action)
+        #)[0].gather(dim=1, index=labels).view(-1)
+        scores = self.q_net(**self.convert_to_inputs_for_update(batch.state, batch.action))[0]
+        state_action_values = scores.gather(dim=1, index=labels).view(-1)
+
+        if log:
+            pred_labels = scores.argmax(dim=1).view(-1)
+            acc = (labels.view(-1) == pred_labels).sum().float() / labels.size(0)
+            info = f'LA: {acc.item()} ('
+            for label in range(3):
+                inds = (labels.view(-1) == label).nonzero().view(-1)
+                if not inds.size(0): continue
+                acc = (labels.view(-1)[inds] == pred_labels[inds]).sum().float() / inds.size(0)
+                info += f'{self.args.id2label[label]}-{acc.item()}'
+                if label != 2: info += ' / '
+                del inds, acc
+            info += ')'
+            print(info)
+            
+            inds = np.random.randint(0, labels.size(0), size=min(5, labels.size(0)))
+            print(labels.view(-1).cpu().data[inds])
+            print(scores.cpu().data[inds])
+            
+            del pred_labels
+            
+        del labels, scores
+
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
                                 reduction='none')

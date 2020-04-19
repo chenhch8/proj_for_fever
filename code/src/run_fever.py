@@ -146,6 +146,9 @@ def train(args,
         epoch_iterator = tqdm([train_ids[i:i + 8] for i in range(0, len(train_ids), 8)],
                               desc='Loss',
                               disable=args.local_rank not in [-1, 0])
+        
+        log_per_steps = len(epoch_iterator) // 10
+
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
         t_losses, losses = losses_trained_in_current_epoch, []
         for step, idxs in enumerate(epoch_iterator):
@@ -207,7 +210,7 @@ def train(args,
                     else:
                         batch = memory.sample(args.train_batch_size)
                         isweights = None
-                    loss = agent.update(batch, isweights)
+                    loss = agent.update(batch, isweights, log=step % log_per_steps == 0)
                     if args.mem.find('priority') != -1:
                         memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()
