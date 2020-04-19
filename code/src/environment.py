@@ -67,24 +67,29 @@ class ChenEnv(BaseEnv):
         super(ChenEnv, self).__init__(K)
 
     def reward(self, state: State, action: Action) -> float:
-        if self.is_done(state):
+        if self.is_done(state) or action.sentence is None:
+            if self.is_done(state):
+                cond1 = state.pred_label == state.label
+            else:
+                cond1 = state.label == action.label
             candidate = get_id_from_evidence(state.candidate)
-            cond1 = state.pred_label == state.label
             cond2 = any([len(get_id_from_evidence(evi) - candidate) == 0 \
                             for evi in state.evidence_set])
         else:
             cond1 = state.label == action.label
-            cond2 = any([action.sentence in evi for evi in state.evidence_set]) or action.sentence is None
+            cond2 = any([action.sentence in evi for evi in state.evidence_set])
 
         if state.label == 2: # N
             return 1. if cond1 else -1.
         else: # T/F
             if cond1 and cond2:
                 return 1.
-            elif cond1 and not cond2 or not cond1 and cond2:
+            elif cond1 and not cond2:
                 return 0.
-            elif not (cond1 or cond2):
+            elif not cond1 and cond2:
                 return -1.
+            elif not (cond1 or cond2):
+                return -2.
             else:
                 return ValueError('condition error')
 
