@@ -210,7 +210,8 @@ def train(args,
                     else:
                         batch = memory.sample(args.train_batch_size)
                         isweights = None
-                    loss = agent.update(batch, isweights, log=step % log_per_steps == 0)
+                    loss = agent.update(batch, isweights,
+                                        log=step % log_per_steps == 0 or step == 5)
                     if args.mem.find('priority') != -1:
                         memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()
