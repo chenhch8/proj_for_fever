@@ -67,44 +67,47 @@ class BaseDQN:
         self.t_net.eval()
         
         batch = Transition(*zip(*transitions))
-        
-        batch_state_next, batch_actions_next = \
-                list(zip(*[(next_state, next_actions) \
-                           for next_state, next_actions in zip(batch.next_state,
-                                                               batch.next_actions) \
-                           if next_state != None]))
-        # max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
-        batch_max_action, batch_max_q_value = \
-            self.select_action(batch_state_next,
-                               batch_actions_next,
-                               is_eval=False,
-                               net=self.q_net if self.dqn_type == 'ddqn' else self.t_net)
-        assert len(batch_max_action) == len(batch_state_next)
 
-        # max next state_action value
-        no_final_mask = torch.tensor([next_state != None for next_state in batch.next_state],
-                                     dtype=torch.bool, device=self.device)
-        next_state_values = torch.zeros(no_final_mask.size(), dtype=torch.float, device=self.device)
-        if self.args.dqn_type == 'dqn':
-            next_state_values[no_final_mask] = \
-                torch.tensor(batch_max_q_value, dtype=torch.float, device=self.device)
-        elif self.args.dqn_type == 'ddqn':
-            max_labels = torch.tensor([action.label for action in batch_max_action],
-                                      dtype=torch.long, device=self.device).view(-1, 1)
-            next_state_values[no_final_mask] = \
-                self.t_net(
-                    **self.convert_to_inputs_for_update(batch_state_next, batch_max_action)
-                )[0].gather(dim=1, index=max_labels).detach().view(-1)
-            del max_labels
+        if any([next_state != None for next_state in batch.next_state]):
+            batch_state_next, batch_actions_next = \
+                    list(zip(*[(next_state, next_actions) \
+                               for next_state, next_actions in zip(batch.next_state,
+                                                                   batch.next_actions) \
+                               if next_state != None]))
+            # max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
+            batch_max_action, batch_max_q_value = \
+                self.select_action(batch_state_next,
+                                   batch_actions_next,
+                                   is_eval=False,
+                                   net=self.q_net if self.dqn_type == 'ddqn' else self.t_net)
+            assert len(batch_max_action) == len(batch_state_next)
+
+            # max next state_action value
+            no_final_mask = torch.tensor([next_state != None for next_state in batch.next_state],
+                                         dtype=torch.bool, device=self.device)
+            next_state_values = torch.zeros(no_final_mask.size(), dtype=torch.float, device=self.device)
+            if self.args.dqn_type == 'dqn':
+                next_state_values[no_final_mask] = \
+                    torch.tensor(batch_max_q_value, dtype=torch.float, device=self.device)
+            elif self.args.dqn_type == 'ddqn':
+                max_labels = torch.tensor([action.label for action in batch_max_action],
+                                          dtype=torch.long, device=self.device).view(-1, 1)
+                next_state_values[no_final_mask] = \
+                    self.t_net(
+                        **self.convert_to_inputs_for_update(batch_state_next, batch_max_action)
+                    )[0].gather(dim=1, index=max_labels).detach().view(-1)
+                del max_labels
+            else:
+                raise ValueError('dqn_type: dqn/ddqn')
+            del batch_max_action, batch_max_q_value, no_final_mask
         else:
-            raise ValueError('dqn_type: dqn/ddqn')
-        del batch_max_action, batch_max_q_value, no_final_mask
+            next_state_values = 0.
         
         # rceward
         rewards = torch.tensor(batch.reward, dtype=torch.float, device=self.device)
         
         # expected Q values
-        assert next_state_values.size() == rewards.size()
+        assert isinstance(next_state_values, float) or next_state_values.size() == rewards.size()
         expected_state_action_values = next_state_values * self.eps_gamma + rewards
         del rewards
 
