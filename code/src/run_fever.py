@@ -260,6 +260,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
     dev_ids = list(range(len(dev_data)))
     epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
                           disable=args.local_rank not in [-1, 0])
+    results_of_q_state_seq = []
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
@@ -307,6 +308,18 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                 batch_state = batch_state_next
                 batch_actions = batch_actions_next
 
+            for i in range(len(batch_state)):
+                q_state_values = [[batch_q_value[i], \
+                                   (args.id2label[batch_state[i].label], args.id2label[batch_state[i].pred_label]), \
+                                   batch_state[i].evidence_set, \
+                                   reduce(lambda seq1, seq2: seq1 + seq2,
+                                          map(lambda sent: [list(sent.id)],
+                                              batch_state[i].candidate)) if len(batch_state[i].candidate) else [], \
+                                  ] for batch_q_value, batch_state in zip(q_value_seq, state_seq)]
+                idx = state_seq[0][i].claim.id
+                results_of_q_state_seq.append([idx, q_state_values])
+
+
             if args.env == 'DuEnv':
                 batch_score = list(q_value_seq[-1])
                 batch_max_score = batch_score.copy()
@@ -336,8 +349,8 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                             if len(state.candidate) else []
                 })
 
-    with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
-        json.dump(results, fw)
+    with open(os.path.join(save_dir, 'decision_seq_result.json'), 'w') as fw:
+        json.dump(results_of_q_state_seq, fw)
     
     predicted_list, scores = calc_fever_score(results, args.dev_true_file)
     with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
