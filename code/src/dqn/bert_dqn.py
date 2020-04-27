@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 # coding=utf-8
-import numpy as np
-import torch
-#from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
-#from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 from functools import reduce
 from typing import List, Tuple
 import pdb
 
-from .base_dqn import BaseDQN
-from data.structure import Action, State, Transition
-
+import numpy as np
+import torch
+from torch.optim import SGD
+#from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
+#from torch.utils.data.distributed import DistributedSampler
 from transformers import (
     WEIGHTS_NAME,
     #AdamW,
@@ -41,7 +39,9 @@ from transformers import (
     XLNetTokenizer,
     get_linear_schedule_with_warmup,
 )
-from torch.optim import SGD
+
+from .base_dqn import BaseDQN
+from data.structure import *
 
 ALL_MODELS = sum(
     (
@@ -70,6 +70,45 @@ MODEL_CLASSES = {
     "xlmroberta": (XLMRobertaConfig, XLMRobertaForSequenceClassification, XLMRobertaTokenizer),
     "flaubert": (FlaubertConfig, FlaubertForSequenceClassification, FlaubertTokenizer),
 }
+
+def bert_load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
+        -> DataSet:
+    cached_file = os.path.join(
+        '/'.join(filename.split('/')[:-1]),
+        'cached_{}_{}_{}.pk'.format('train' if filename.find('train') != -1 else 'dev',
+                                    list(filter(None, args.model_name_or_path.split('/'))).pop(),
+                                    args.max_sent_length)
+    )
+    data = None
+    if not os.path.exists(cached_file):
+        args.logger.info(f'Loading and processing data from {filename}')
+        data = []
+        with open(filename, 'rb') as fr:
+            for line in tqdm(fr.readlines()):
+                instance = json.loads(line.decode('utf-8').strip())
+                claim = Claim(id=instance['id'],
+                              str=instance['claim'],
+                              tokens=token_fn(instance['claim'], max_length=args.max_sent_length))
+                sent2id = {}
+                sentences = []
+                for title, text in instance['documents'].items():
+                    for line_num, sentence in text.items():
+                        sentences.append(Sentence(id=(title, int(line_num)),
+                                                  str=sentence,
+                                                  tokens=token_fn(sentence, max_length=args.max_sent_length)))
+                        sent2id[(title, int(line_num))] = len(sentences) - 1
+                evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
+                                    for title, line_num in evi] \
+                                        for evi in instance['evidence_set']] \
+                                if not is_eval else instance['evidence_set']
+                data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
+            with open(cached_file, 'wb') as fw:
+                pickle.dump(data, fw)
+    else:
+        args.logger.info(f'Loading data from {cached_file}')
+        with open(cached_file, 'rb') as fr:
+            data = pickle.load(fr)
+    return data
 
 
 def convert_tokens_to_bert_inputs(all_tokens_a: List[int],

@@ -15,10 +15,11 @@ from functools import reduce
 from collections import defaultdict
 #from multiprocessing import cpu_count, Pool
 
-from dqn.bert_dqn import BertDQN
+from dqn.bert_dqn import BertDQN, bert_load_and_process_data
+from dqn.lstm_dqn import LstmDQN, lstm_load_and_process_data
 from environment import BaseEnv, DuEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
-from data.structure import Transition, Action, State, Claim, Sentence, Evidence, EvidenceSet
+from data.structure import *
 from config import set_com_args, set_dqn_args, set_bert_args
 
 from scorer import fever_score
@@ -26,13 +27,14 @@ import pdb
 
 logger = logging.getLogger(__name__)
 
-Agent = BertDQN
+#Agent = BertDQN
+Agent = LstmDQN
+load_and_process_data = lstm_load_and_process_data
 Env = {'DuEnv': DuEnv, 'ChenEnv': ChenEnv}
 Memory = {'random': ReplayMemory, 'priority': PrioritizedReplayMemory,
           'label_random': ReplayMemoryWithLabel,
           'label_priority': PrioritizedReplayMemoryWithLabel}
 
-DataSet = List[Tuple[Claim, int, Evidence, List[Sentence]]]
 
 def set_random_seeds(random_seed):
     """Sets all possible random seeds so results can be reproduced"""
@@ -46,46 +48,6 @@ def set_random_seeds(random_seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_seed)
         torch.cuda.manual_seed(random_seed)
-
-
-def load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
-        -> DataSet:
-    cached_file = os.path.join(
-        '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_{}.pk'.format('train' if filename.find('train') != -1 else 'dev',
-                                    list(filter(None, args.model_name_or_path.split('/'))).pop(),
-                                    args.max_sent_length)
-    )
-    data = None
-    if not os.path.exists(cached_file):
-        logger.info(f'Loading and processing data from {filename}')
-        data = []
-        with open(filename, 'rb') as fr:
-            for line in tqdm(fr.readlines()):
-                instance = json.loads(line.decode('utf-8').strip())
-                claim = Claim(id=instance['id'],
-                              str=instance['claim'],
-                              tokens=token_fn(instance['claim'], max_length=args.max_sent_length))
-                sent2id = {}
-                sentences = []
-                for title, text in instance['documents'].items():
-                    for line_num, sentence in text.items():
-                        sentences.append(Sentence(id=(title, int(line_num)),
-                                                  str=sentence,
-                                                  tokens=token_fn(sentence, max_length=args.max_sent_length)))
-                        sent2id[(title, int(line_num))] = len(sentences) - 1
-                evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
-                                    for title, line_num in evi] \
-                                        for evi in instance['evidence_set']] \
-                                if not is_eval else instance['evidence_set']
-                data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
-            with open(cached_file, 'wb') as fw:
-                pickle.dump(data, fw)
-    else:
-        logger.info(f'Loading data from {cached_file}')
-        with open(cached_file, 'rb') as fr:
-            data = pickle.load(fr)
-    return data
 
 
 def calc_fever_score(predicted_list: List[dict], true_file: str) \
@@ -182,13 +144,12 @@ def train(args,
                                                            batch_selected_action,
                                                            batch_actions):
                     state_next, reward, done = env.step(state, selected_action)
-                    actions_next = None
-                    if not done:
-                        actions_next = \
-                                list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
-                                            actions)) if selected_action.sentence is not None else []
-                        if len(actions_next) == 0:
-                            actions_next = [Action(sentence=None, label='F/T/N')]
+                    if done: break
+                    actions_next = \
+                            list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
+                                        actions)) if selected_action.sentence is not None else []
+                    if len(actions_next) == 0:
+                        actions_next = [Action(sentence=None, label='F/T/N')]
                     
                     data = {'item': Transition(state=state,
                                                action=selected_action,
@@ -199,7 +160,7 @@ def train(args,
                         data['label'] = state.label
                     memory.push(**data)
                     
-                    if done: continue
+                    #if done: continue
                     batch_state_next.append(state_next)
                     batch_actions_next.append(actions_next)
                 batch_state = batch_state_next

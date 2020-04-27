@@ -9,5 +9,6 @@ Sentence = namedtuple('Sentence', ('id', 'tokens', 'str'))
 Claim = namedtuple('Claim', ('id', 'str', 'tokens'))
 Evidence = List[Sentence]
 EvidenceSet = List[Evidence]
+DataSet = List[Tuple[Claim, int, Evidence, List[Sentence]]]
 
 Sentence.__new__.__defaults__ = (None, None)
