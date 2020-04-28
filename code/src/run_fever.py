@@ -220,7 +220,9 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token)
     dev_ids = list(range(len(dev_data)))
-    epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
+    #epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
+    #                      disable=args.local_rank not in [-1, 0])
+    epoch_iterator = tqdm([dev_ids[i:i + 1] for i in range(0, len(dev_ids))],
                           disable=args.local_rank not in [-1, 0])
     results_of_q_state_seq = []
     results = []
@@ -259,17 +261,21 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                             list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
                                         actions)) if selected_action.sentence is not None else []
                     if len(actions_next) == 0:
-                        actions_next = [Action(sentence=None, label='F/T/N')]
+                        #actions_next = [Action(sentence=None, label='F/T/N')]
+                        break
                     
                     batch_state_next.append(state_next)
                     batch_actions_next.append(actions_next)
                 
                 q_value_seq.append(batch_q_value)
                 state_seq.append(batch_state_next)
+                
+                if len(batch_state_next) == 0:
+                    break
 
                 batch_state = batch_state_next
                 batch_actions = batch_actions_next
-
+                
             for i in range(len(batch_state)):
                 q_state_values = [[batch_q_value[i], \
                                    (args.id2label[batch_state[i].label], args.id2label[batch_state[i].pred_label]), \

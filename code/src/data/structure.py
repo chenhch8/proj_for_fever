@@ -1,6 +1,6 @@
 #coding: utf8 
 from collections import namedtuple
-from typing import List
+from typing import List, Tuple
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'next_actions'))
 Action = namedtuple('Action', ('label', 'sentence'))

@@ -3,6 +3,10 @@
 from tqdm import tqdm, trange
 from functools import reduce
 from typing import List, Tuple
+from copy import deepcopy
+import os
+import json
+import pickle
 import pdb
 
 import numpy as np
@@ -58,15 +62,32 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
     )
 
     def feature_extractor(texts: List[str]) -> List[List[float]]:
-        pass
+        texts = [texts[0]] + [[texts[0], text] for text in texts[1:]]
+        inputs = tokenizer.batch_encode_plus(texts, max_length=256)
+        # padding
+        max_length = max([len(tokens) for tokens in inputs['input_ids']])
+        for key in inputs:
+            inputs[key] = torch.tensor([val + [0] * (max_length - len(val))for val in inputs[key]],
+                                       dtype=torch.long)
+        with torch.no_grad():
+            INTERVEL = 64
+            outputs = [model(
+                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
+                                       inputs.items()))
+                        )[1] for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
+            outputs = torch.cat(outputs, dim=0)
+            assert outputs.size(0) == inputs['input_ids'].size(0)
+        return outputs.detach().cpu().numpy().tolist()
     
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_{}_lstm.pk'.format('train' if filename.find('train') != -1 else 'dev',
-                                    list(filter(None, args.model_name_or_path.split('/'))).pop())
+        'cached_{}_{}_lstm.pk'.format(
+            'train' if filename.find('train') != -1 else 'dev',
+            list(filter(None, args.model_name_or_path.split('/'))).pop())
     )
     data = None
     if not os.path.exists(cached_file):
+        model.to(args.device)
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
         skip, count = 0, 0
@@ -76,31 +97,36 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                 
                 total_texts = [sentence for _, text in instance['documents'].items() \
                                             for _, sentence in text.items()]
-                if not is_eval and totel_texts < 5:
+                if not is_eval and len(total_texts) < 5:
                     skip += 1
                     continue
                 count += 1
-
+                
                 total_texts = [instance['claim']] + total_texts
-                texts_embedding = feature_extractor(total_texts)
+                semantic_embedding = feature_extractor(total_texts)
                 
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=token_fn(instance['claim'], max_length=args.max_sent_length))
+                              tokens=semantic_embedding[0])
                 sent2id = {}
                 sentences = []
+                text_id = 1
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence, max_length=args.max_sent_length)))
+                                                  tokens=semantic_embedding[text_id]))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
+                        text_id += 1
+                assert text_id == len(semantic_embedding)
                 
                 evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                     for title, line_num in evi] \
                                         for evi in instance['evidence_set']] \
                                 if not is_eval else instance['evidence_set']
                 data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
+
+                if count > 1000: break
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
         args.logger.info(f'skip: {skip}({skip / count})')
@@ -108,6 +134,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         args.logger.info(f'Loading data from {cached_file}')
         with open(cached_file, 'rb') as fr:
             data = pickle.load(fr)
+    del model
     return data
 
 
@@ -123,7 +150,7 @@ def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
     state_pad = pad_sequence(batch_state_tensor, batch_first=True)
     actions_pad = pad_sequence(batch_actions_tensor, batch_first=True)
 
-    state_mask = torch.torch([[1] * size + [0] * (s_max - size) for size in state_len],
+    state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
                              dtype=torch.bool)
     actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
                                 dtype=torch.bool)
@@ -164,12 +191,12 @@ class QNetwork(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        init.kaiming_uniform_(self.q_weight, a=math.sqrt(5))
-        init.kaiming_uniform_(self.a_weight, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.q_weight, a=np.sqrt(5))
+        nn.init.kaiming_uniform_(self.a_weight, a=np.sqrt(5))
         if self.q_bias is not None:
             feature_in = self.q_weight.size(2)
-            bound = 1 / math.sqrt(feature_in)
-            init.uniform_(self.q_bias, -bound, bound)
+            bound = 1 / np.sqrt(feature_in)
+            nn.init.uniform_(self.q_bias, -bound, bound)
 
     def attention_aggregate(self, query, key, value, mask):
         '''
@@ -183,10 +210,10 @@ class QNetwork(nn.Module):
         '''
         batch, seq = query.size(0), key.size(1)
         # [batch, seq]
-        A = query.unsqueeze(2)
-            .matmul(self.a_weight.matmul(key.transpose(2, 1)))
-            .squeeze()
-            .masked_fill(torch.logical_not(mask), float('-inf'))
+        A = query.unsqueeze(2) \
+            .matmul(self.a_weight.matmul(key.transpose(2, 1))) \
+            .squeeze() \
+            .masked_fill(torch.logical_not(mask), float('-inf')) \
             .softmax(dim=1)
         assert A.size() == torch.Size((batch, seq))
         return A.unsqueeze(2).mm(value).sum(dim=1, keepdim=True)
@@ -208,6 +235,7 @@ class QNetwork(nn.Module):
         out, _ = self.lstm(states)
         assert out.size() == torch.Size((batch, seq, 2 * hidden_size))
         # [batch, 1, hidden_size]
+        pdb.set_trace()
         states_embedding = self.attention_aggregate(states[:, 0], out, out, state_mask)
         assert out.size() == torch.Size((batch, 1, hidden_size))
         # [batch, num_labels, hidden_size, 1]
@@ -228,7 +256,7 @@ class LstmDQN(BaseDQN):
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-        args.model_type = args.model_type.lower()
+        model_type = args.model_name_or_path.lower().split('/')[-1]
         HIDDEN_SIZE = {
             'bert-base-uncased': 768,
             'bert-base-cased': 768,
@@ -236,15 +264,14 @@ class LstmDQN(BaseDQN):
         }
         # q network
         self.q_net = QNetwork(
-             input_size=HIDDEN_SIZE[args.model_type.lower()],
-             hidden_size=HIDDEN_SIZE[args.model_type.lower()]
-             num_labels=args.num_labels,
+             input_size=HIDDEN_SIZE[model_type],
+             hidden_size=HIDDEN_SIZE[model_type],
+             num_labels=args.num_labels
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
         self.q_net.zero_grad()
 
-        self.set_network_untrainable(self.sent_encoder)
         self.set_network_untrainable(self.t_net)
 
         if args.local_rank == 0:

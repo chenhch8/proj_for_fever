@@ -188,8 +188,8 @@ class BaseDQN:
         q_values = None
         with torch.no_grad():
             batch_inputs = self.convert_to_inputs_for_select_action(batch_state, batch_actions)
-            K, DIM = list(batch_inputs.values())[0].size()
-            INTERVAL = MAX_SIZE // DIM
+            K, *DIM = list(batch_inputs.values())[0].size()
+            INTERVAL = MAX_SIZE // np.prod(DIM)
             q_values = [net(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
                                        batch_inputs.items()))
