@@ -250,7 +250,7 @@ class BaseDQN:
         state_dict = torch.load(os.path.join(input_dir, 'model.bin'),
                                 map_location=lambda storage, loc: storage)
         q_net.load_state_dict(state_dict['q_net'])
-        self.steps_done = state_dict['steps_done']
+        #self.steps_done = state_dict['steps_done']
         self.optimizer.load_state_dict(state_dict['optimizer'])
         if self.scheduler is not None and 'scheduler' in state_dict:
             self.scheduler.load_state_dict(['scheduler'])

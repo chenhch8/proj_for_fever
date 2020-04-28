@@ -82,16 +82,17 @@ class ChenEnv(BaseEnv):
         if state.label == 2: # N
             return 1. if cond1 else -1.
         else: # T/F
-            if cond1 and cond2:
-                return 1.
-            elif cond1 and not cond2:
-                return 0.
-            elif not cond1 and cond2:
-                return -1.
-            elif not (cond1 or cond2):
-                return -2.
-            else:
-                return ValueError('condition error')
+            return 1 if cond1 and cond2 else -1
+            #if cond1 and cond2:
+            #    return 1.
+            #elif cond1 and not cond2:
+            #    return 0.
+            #elif not cond1 and cond2:
+            #    return -1.
+            #elif not (cond1 or cond2):
+            #    return -2.
+            #else:
+            #    return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
         done = self.is_done(state)
