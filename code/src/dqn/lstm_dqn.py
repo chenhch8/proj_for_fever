@@ -14,7 +14,7 @@ import torch
 from torch import nn
 from torch.nn.parameter import Parameter
 from torch.nn.utils.rnn import pad_sequence
-from torch.optim import SGD
+from torch.optim import SGD, Adam, AdamW
 #from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 #from torch.utils.data.distributed import DistributedSampler
 
@@ -126,7 +126,6 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                                 if not is_eval else instance['evidence_set']
                 data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
 
-                if count > 1000: break
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
         args.logger.info(f'skip: {skip}({skip / count})')
@@ -151,9 +150,9 @@ def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
     actions_pad = pad_sequence(batch_actions_tensor, batch_first=True)
 
     state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
-                             dtype=torch.bool)
+                             dtype=torch.float)
     actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
-                                dtype=torch.bool)
+                                dtype=torch.float)
     return {
         'states': state_pad.to(device),
         'actions': actions_pad.to(device),
@@ -169,11 +168,15 @@ class QNetwork(nn.Module):
                  hidden_size=None,
                  dropout=0.1,
                  bidirectional=True,
-                 num_layers=3):
+                 num_layers=3,
+                 dueling=True,
+                 aggregate='attn'):
         super(QNetwork, self).__init__()
         if hidden_size is None:
             hidden_size = input_size
         num_hidden_state = 2 if bidirectional else 1
+        self.dueling = dueling
+        self.aggregate = aggregate
         self.lstm = nn.LSTM(input_size=input_size,
                             hidden_size=hidden_size,
                             dropout=dropout,
@@ -182,41 +185,64 @@ class QNetwork(nn.Module):
                             bidirectional=bidirectional,
                             bias=True)
         # attention paramters
-        self.a_weight = Parameter(torch.Tensor(input_size, hidden_size * num_hidden_state))
-        # q value parameters
-        self.q_weight = Parameter(torch.Tensor(num_labels,
-                                               hidden_size,
-                                               hidden_size * num_hidden_state))
-        self.q_bias = Parameter(torch.Tensor(num_layers))
+        self.attn_layer = nn.Sequential(
+            nn.Linear(
+                input_size + hidden_size * num_hidden_state,
+                hidden_size
+            ),
+            nn.ReLU(True),
+            nn.Linear(hidden_size, 1)
+        )
+        # Value
+        if dueling:
+            self.value_layer = nn.Linear(
+                hidden_size * num_hidden_state,
+                1
+            )
+        # Advantage
+        self.weight = Parameter(torch.Tensor(num_labels,
+                                             hidden_size,
+                                             hidden_size * num_hidden_state))
+        self.bias = Parameter(torch.Tensor(num_labels))
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.q_weight, a=np.sqrt(5))
-        nn.init.kaiming_uniform_(self.a_weight, a=np.sqrt(5))
-        if self.q_bias is not None:
-            feature_in = self.q_weight.size(2)
+        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
+        if self.bias is not None:
+            feature_in = self.weight.size(2)
             bound = 1 / np.sqrt(feature_in)
-            nn.init.uniform_(self.q_bias, -bound, bound)
+            nn.init.uniform_(self.bias, -bound, bound)
 
-    def attention_aggregate(self, query, key, value, mask):
+    def attention_aggregate(self, query, key, value, q_mask, k_mask):
         '''
-        query: [batch, hidden_size]
-        key: [batch, seq, hidden_size * num_hidden_state]
-        value: [batch, seq, hidden_size * num_hidden_state]
-        mask: [batch, seq]
+        query: [batch, seq1, hidden_size]
+        key: [batch, seq2, hidden_size * num_hidden_state]
+        value: [batch, seq2, hidden_size * num_hidden_state]
+        q_mask: [batch, seq1]
+        k_mask: [batch, seq2]
 
         return:
-            [batch, 1, hidden_size]
+            [batch, seq1, hidden_size]
         '''
-        batch, seq = query.size(0), key.size(1)
-        # [batch, seq]
-        A = query.unsqueeze(2) \
-            .matmul(self.a_weight.matmul(key.transpose(2, 1))) \
-            .squeeze() \
-            .masked_fill(torch.logical_not(mask), float('-inf')) \
-            .softmax(dim=1)
-        assert A.size() == torch.Size((batch, seq))
-        return A.unsqueeze(2).mm(value).sum(dim=1, keepdim=True)
+        batch, seq1, hidden_size1 = query.size()
+        _, seq2, hidden_size2 = key.size()
+
+        mask = q_mask.unsqueeze(2).matmul(k_mask.unsqueeze(1))
+        assert mask.size() == torch.Size((batch, seq1, seq2))
+        
+        query_e = query.unsqueeze(2).expand(-1, -1, seq2, -1)
+        key_e = key.unsqueeze(1).expand(-1, seq1, -1, -1)
+        stack = torch.cat([query_e, key_e], dim=-1)
+        assert stack.size() == torch.Size((batch, seq1, seq2, hidden_size1 + hidden_size2))
+        # [batch, seq1, seq2]
+        A = self.attn_layer(stack) \
+                .squeeze(-1) \
+                .masked_fill(torch.logical_not(mask), float('-inf')) \
+                .exp()
+        A_sum = A.sum(dim=-1, keepdim=True).clamp(min=2e-15)
+        attn = A.div(A_sum)
+        assert A.size() == torch.Size((batch, seq1, seq2))
+        return attn.matmul(value)
         
 
     def forward(self, states, state_mask, actions, actions_mask):
@@ -234,19 +260,36 @@ class QNetwork(nn.Module):
         # [batch, seq, hidden_size * num_hidden_state]
         out, _ = self.lstm(states)
         assert out.size() == torch.Size((batch, seq, 2 * hidden_size))
-        # [batch, 1, hidden_size]
-        pdb.set_trace()
-        states_embedding = self.attention_aggregate(states[:, 0], out, out, state_mask)
-        assert out.size() == torch.Size((batch, 1, hidden_size))
-        # [batch, num_labels, hidden_size, 1]
-        ws = self.q_weight.unsqueeze(0).matmul(states_embedding.unsqueeze(1).transpose(3, 2))
-        assert ws.size() == torch.Size(batch, num_labels, hidden_size, 1)
-        # [batch, seq2, nums_labels]
-        logits = actions.unsqueeze(1).matmul(ws).squeeze().transpose(2, 1) + self.bias[None, None, :]
-        assert logits.size() == torch.Size(batch, seq2, num_labels)
+        if self.aggregate == 'attn':
+            # [batch, seq2, hidden_size * num_hidden_state]
+            states_feature = self.attention_aggregate(actions,
+                                                        out, out,
+                                                        actions_mask,
+                                                    state_mask)
+        elif self.aggregate == 'last_step':
+        #    states_feature =
+            pass
+        assert states_feature.size() == torch.Size((batch, seq2, 2 * hidden_size))
+        # [batch, num_labels, hidden_size, seq2]
+        ws = self.weight.unsqueeze(0).matmul(states_feature.unsqueeze(1).transpose(3, 2))
+        assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq2))
+        if self.dueling:
+            # Value - [batch, seq2, 1]
+            val_scores = self.value_layer(states_feature)
+            assert val_scores.size() == torch.Size((batch, seq2, 1))
+        # Advantage - [batch, seq2, num_labels]
+        adv_scores = actions.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
+        adv_scores = adv_scores.permute(0, 2, 1)
+        assert adv_scores.size() == torch.Size((batch, seq2, num_labels))
+        # Q value - [batch, seq2, num_labels]
+        if self.dueling:
+            q_value = val_scores + adv_scores - adv_scores.mean(dim=1, keepdim=True)
+        else:
+            q_value = adv_scores
         # 去除padding的action对应的score
-        logits = logits.reshape(-1, num_labels)[actions_mask.view(-1)]
-        return (logits,)
+        no_pad = actions_mask.view(-1).nonzero().view(-1)
+        q_value = q_value.reshape(-1, num_labels)[no_pad]
+        return (q_value,)
 
 
 class LstmDQN(BaseDQN):
@@ -266,7 +309,8 @@ class LstmDQN(BaseDQN):
         self.q_net = QNetwork(
              input_size=HIDDEN_SIZE[model_type],
              hidden_size=HIDDEN_SIZE[model_type],
-             num_labels=args.num_labels
+             num_labels=args.num_labels,
+             dueling=args.dueling
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
@@ -277,7 +321,9 @@ class LstmDQN(BaseDQN):
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
-        self.optimizer = SGD(self.q_net.parameters(), lr=args.learning_rate, momentum=0.9)
+        #self.optimizer = SGD(self.q_net.parameters(), lr=args.learning_rate, momentum=0.9)
+        self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
+        #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
 
 

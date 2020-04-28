@@ -2,7 +2,7 @@
 from collections import namedtuple
 from typing import List, Tuple
 
-Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'next_actions'))
+Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'next_actions', 'done'))
 Action = namedtuple('Action', ('label', 'sentence'))
 State = namedtuple('State', ('claim', 'label', 'evidence_set', 'candidate', 'pred_label', 'count'))
 Sentence = namedtuple('Sentence', ('id', 'tokens', 'str'))

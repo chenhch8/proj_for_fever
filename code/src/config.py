@@ -96,6 +96,8 @@ def set_com_args(parser) -> None:
 
 def set_dqn_args(parser) -> None:
     parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
+    parser.add_argument('--dueling', action='store_true')
+    parser.add_argument('--aggregate', default='attn', type=str, choices=['attn', 'last_step'])
     # replay memory
     parser.add_argument('--capacity', default=200000, type=int)
     # discount factor
@@ -108,7 +110,6 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--target_update', default=10, type=int)
     parser.add_argument('--tau', default=1., type=float)
 
-    parser.add_argument('--env', default='DuEnv', choices=['DuEnv', 'ChenEnv'])
     parser.add_argument('--mem', default='label_priority', choices=['random', 'priority', 'label_random', 'label_priority'])
 
 def set_bert_args(parser) -> None:

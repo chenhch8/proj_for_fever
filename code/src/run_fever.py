@@ -17,7 +17,7 @@ from collections import defaultdict
 
 from dqn.bert_dqn import BertDQN, bert_load_and_process_data
 from dqn.lstm_dqn import LstmDQN, lstm_load_and_process_data
-from environment import BaseEnv, DuEnv, ChenEnv
+from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import *
 from config import set_com_args, set_dqn_args, set_bert_args
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 #Agent = BertDQN
 Agent = LstmDQN
 load_and_process_data = lstm_load_and_process_data
-Env = {'DuEnv': DuEnv, 'ChenEnv': ChenEnv}
+Env = ChenEnv
 Memory = {'random': ReplayMemory, 'priority': PrioritizedReplayMemory,
           'label_random': ReplayMemoryWithLabel,
           'label_priority': PrioritizedReplayMemoryWithLabel}
@@ -92,7 +92,7 @@ def train(args,
           steps_trained_in_current_epoch: int=0,
           losses_trained_in_current_epoch: List[float]=[]) -> None:
     logger.info('Training')
-    env = Env[args.env](args.max_evi_size)
+    env = Env(args.max_evi_size)
     if args.mem.find('label') == -1:
         memory = Memory[args.mem](args.capacity)
     else:
@@ -144,25 +144,29 @@ def train(args,
                                                            batch_selected_action,
                                                            batch_actions):
                     state_next, reward, done = env.step(state, selected_action)
-                    if done: break
                     actions_next = \
                             list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
                                         actions)) if selected_action.sentence is not None else []
-                    if len(actions_next) == 0:
-                        actions_next = [Action(sentence=None, label='F/T/N')]
+                    done = done if len(actions_next) else True
+                    #if len(actions_next) == 0:
+                        #pdb.set_trace()
+                        #actions_next = [Action(sentence=None, label='F/T/N')]
                     
                     data = {'item': Transition(state=state,
                                                action=selected_action,
                                                next_state=state_next,
                                                reward=reward,
-                                               next_actions=actions_next)}
+                                               next_actions=actions_next,
+                                               done=done)}
                     if args.mem.find('label') != -1:
                         data['label'] = state.label
                     memory.push(**data)
                     
-                    #if done: continue
+                    if done: continue
+                    
                     batch_state_next.append(state_next)
                     batch_actions_next.append(actions_next)
+
                 batch_state = batch_state_next
                 batch_actions = batch_actions_next
                 # sample batch data and optimize model
@@ -288,20 +292,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                 results_of_q_state_seq.append([idx, q_state_values])
 
 
-            if args.env == 'DuEnv':
-                batch_score = list(q_value_seq[-1])
-                batch_max_score = batch_score.copy()
-                batch_max_t = [-1] * len(state_seq[0])
-                for t in range(len(state_seq) - 2, -1, -1):
-                    batch_q_now = q_value_seq[t]
-                    batch_q_next = q_value_seq[t + 1]
-                    for i, (q_now, q_next) in enumerate(zip(batch_q_now, batch_q_next)):
-                        batch_score[i] = q_now - args.eps_gamma * q_next + batch_score[i]
-                        if batch_max_score[i] < batch_score[i]:
-                            batch_max_score[i] = batch_score[i]
-                            batch_max_t[i] = t
-            else:
-                batch_max_t = [-1] * len(state_seq[0])
+            batch_max_t = [-1] * len(state_seq[0])
 
             assert len(batch_max_t) == len(idxs)
             for i, max_t in enumerate(batch_max_t):

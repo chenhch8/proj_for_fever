@@ -68,12 +68,14 @@ class BaseDQN:
         
         batch = Transition(*zip(*transitions))
 
-        if any([next_state != None for next_state in batch.next_state]):
+        if not all(batch.done):
             batch_state_next, batch_actions_next = \
                     list(zip(*[(next_state, next_actions) \
-                               for next_state, next_actions in zip(batch.next_state,
-                                                                   batch.next_actions) \
-                               if next_state != None]))
+                               for next_state, \
+                                   next_actions, \
+                                   done in zip(batch.next_state,
+                                               batch.next_actions,
+                                               batch.done) if not done]))
             # max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
             batch_max_action, batch_max_q_value = \
                 self.select_action(batch_state_next,
@@ -83,7 +85,7 @@ class BaseDQN:
             assert len(batch_max_action) == len(batch_state_next)
 
             # max next state_action value
-            no_final_mask = torch.tensor([next_state != None for next_state in batch.next_state],
+            no_final_mask = torch.tensor([not done for done in batch.done],
                                          dtype=torch.bool, device=self.device)
             next_state_values = torch.zeros(no_final_mask.size(), dtype=torch.float, device=self.device)
             if self.args.dqn_type == 'dqn':
@@ -112,9 +114,9 @@ class BaseDQN:
         del rewards
 
         # state_action value of q_net
-        labels = torch.tensor([action.label if state_next != None else state.pred_label \
-                                for state, action, state_next in zip(batch.state, batch.action, batch.next_state)],
-                               dtype=torch.long, device=self.device).view(-1, 1)
+        labels = torch.tensor([action.label if not done else state.pred_label \
+                                for state, action, done in zip(batch.state, batch.action, batch.done)],
+                              dtype=torch.long, device=self.device).view(-1, 1)
         #state_action_values = self.q_net(
         #    **self.convert_to_inputs_for_update(batch.state, batch.action)
         #)[0].gather(dim=1, index=labels).view(-1)
@@ -195,7 +197,6 @@ class BaseDQN:
                                        batch_inputs.items()))
                         )[0] for i in range(0, K, INTERVAL)]
             q_values = torch.cat(q_values, dim=0)
-            assert q_values.size(0) == K
         
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
@@ -226,7 +227,7 @@ class BaseDQN:
             q = cur_q_values[sent_id, label_id].item()
             batch_selected_action.append((action, q))
             offset += len(actions)
-
+        assert offset == q_values.size(0)
         return tuple(zip(*batch_selected_action))
 
 

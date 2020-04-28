@@ -38,30 +38,6 @@ class BaseEnv:
         return NotImplementedError()
 
 
-class DuEnv(BaseEnv):
-    def __init__(self, K=5):
-        super(DuEnv, self).__init__(K)
-
-    def score(self, state: State) -> float:
-        I = 1 if state.label == state.pred_label else -1
-        if len(state.evidence_set):
-            max_jaccard = max([self.jaccard(evi, state.candidate) for evi in state.evidence_set])
-        else:
-            max_jaccard = self.jaccard([], state.candidate)
-        return I * max_jaccard
-
-    def reward(self, state_now: State, state_next: State) -> float:
-        if self.is_done(state_now):
-            return self.score(state_now)
-        else:
-            return self.score(state_now) - self.score(state_next)
-    
-    def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = self.is_done(state)
-        state_next = BaseEnv.new_state(state, action) if not done else None
-        return state_next, self.reward(state, state_next), done
-
-
 class ChenEnv(BaseEnv):
     def __init__(self, K=5):
         super(ChenEnv, self).__init__(K)
@@ -82,19 +58,20 @@ class ChenEnv(BaseEnv):
         if state.label == 2: # N
             return 1. if cond1 else -1.
         else: # T/F
-            if cond1 and cond2:
-                return 1.
-            elif cond1 and not cond2:
-                return 0.
-            elif not cond1 and cond2:
-                return -1.
-            elif not (cond1 or cond2):
-                return -2.
-            else:
-                return ValueError('condition error')
+            return 1. if cond1 and cond2 else -1
+            #if cond1 and cond2:
+            #    return 1.
+            #elif cond1 and not cond2:
+            #    return 0.
+            #elif not cond1 and cond2:
+            #    return -1.
+            #elif not (cond1 or cond2):
+            #    return -2.
+            #else:
+            #    return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = self.is_done(state)
-        state_next = BaseEnv.new_state(state, action) if not done else None
-        return state_next, self.reward(state, action), done
+        state_next = BaseEnv.new_state(state, action)
+        done = self.is_done(state_next)
+        return state_next, self.reward(state_next, action), done
 
