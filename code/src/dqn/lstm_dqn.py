@@ -91,6 +91,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
         skip, count = 0, 0
+        num = 0
         with open(filename, 'rb') as fr:
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
@@ -125,10 +126,17 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                                         for evi in instance['evidence_set']] \
                                 if not is_eval else instance['evidence_set']
                 data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
+                
+                if count % 10000 == 0 and count:
+                    with open(f'{cached_file}-{num}', 'wb') as fw:
+                        pickle.dump(data, fw)
+                    args.logger.info(f'saving to {cached_file}-{num}. Skip: {skip}({skip / count})')
+                    data = []
+                    num += 1
 
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
-        args.logger.info(f'skip: {skip}({skip / count})')
+        args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
     else:
         args.logger.info(f'Loading data from {cached_file}')
         with open(cached_file, 'rb') as fr:
