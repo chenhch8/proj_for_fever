@@ -91,7 +91,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
         skip, count = 0, 0
-        num = 0
+        num = 5
         with open(filename, 'rb') as fr:
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
@@ -102,6 +102,8 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                     skip += 1
                     continue
                 count += 1
+                if count <= 50000:
+                    continue
                 
                 total_texts = [instance['claim']] + total_texts
                 semantic_embedding = feature_extractor(total_texts)
