@@ -114,7 +114,7 @@ class BaseDQN:
         del rewards
 
         # state_action value of q_net
-        labels = torch.tensor([action.label for action in batch.action)],
+        labels = torch.tensor([action.label for action in batch.action],
                               dtype=torch.long, device=self.device).view(-1, 1)
         #state_action_values = self.q_net(
         #    **self.convert_to_inputs_for_update(batch.state, batch.action)

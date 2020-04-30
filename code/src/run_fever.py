@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 # coding=utf-8
-import torch
-import numpy as np
 import logging
 import os
 import argparse
@@ -15,11 +13,16 @@ from functools import reduce
 from collections import defaultdict
 #from multiprocessing import cpu_count, Pool
 
+import torch
+from torch.utils.data.dataloader import DataLoader
+import numpy as np
+
 from dqn.bert_dqn import BertDQN, bert_load_and_process_data
 from dqn.lstm_dqn import LstmDQN, lstm_load_and_process_data
 from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import *
+from data.dataset import collate_fn, FeverDataset
 from config import set_com_args, set_dqn_args, set_bert_args
 
 from scorer import fever_score
@@ -86,7 +89,7 @@ def calc_fever_score(predicted_list: List[dict], true_file: str) \
 
 def train(args,
           agent: Agent,
-          train_data: DataSet,
+          train_data: FeverDataset,
           epochs_trained: int=0,
           acc_loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0,
@@ -98,15 +101,14 @@ def train(args,
     else:
         memory = Memory[args.mem](args.capacity, args.num_labels)
     
-    train_ids = list(range(len(train_data)))
+    data_loader = DataLoader(train_data, num_workers=1, collate_fn=collate_fn, batch_size=8, shuffle=True)
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
     for epoch in train_iterator:
-        random.shuffle(train_ids)
         if epochs_trained > 0:
             epochs_trained -= 1
             sleep(0.1)
             continue
-        epoch_iterator = tqdm([train_ids[i:i + 8] for i in range(0, len(train_ids), 8)],
+        epoch_iterator = tqdm(data_loader,
                               desc='Loss',
                               disable=args.local_rank not in [-1, 0])
         
@@ -114,25 +116,12 @@ def train(args,
 
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
         t_losses, losses = losses_trained_in_current_epoch, []
-        for step, idxs in enumerate(epoch_iterator):
+        
+        for step, (batch_state, batch_actions) in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
                 continue
             
-            batch_state, batch_actions = [], []
-            for idx in idxs:
-                claim, label, evidence_set, sentences = train_data[idx]
-                batch_state.append(
-                    State(claim=claim,
-                          label=label,
-                          evidence_set=evidence_set,
-                          pred_label=args.label2id['NOT ENOUGH INFO'],
-                          candidate=[],
-                          count=0)
-                )
-                batch_actions.append(
-                    [Action(sentence=sent, label='F/T/N') for sent in sentences]
-                )
             #pdb.set_trace()
             while True:
                 batch_selected_action, _ = agent.select_action(batch_state,
@@ -224,31 +213,16 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token)
-    dev_ids = list(range(len(dev_data)))
     #epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
     #                      disable=args.local_rank not in [-1, 0])
-    epoch_iterator = tqdm([dev_ids[i:i + 1] for i in range(0, len(dev_ids))],
+    data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
+    epoch_iterator = tqdm(data_loader,
                           disable=args.local_rank not in [-1, 0])
     results_of_q_state_seq = []
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
-        for idxs in epoch_iterator:
-            batch_state, batch_actions = [], []
-            for idx in idxs:
-                claim, label, evidence_set, sentences = dev_data[idx]
-                batch_state.append(
-                    State(claim=claim,
-                          label=label,
-                          evidence_set=evidence_set,
-                          pred_label=args.label2id['NOT ENOUGH INFO'],
-                          candidate=[],
-                          count=0)
-                )
-                batch_actions.append(
-                    [Action(sentence=sent, label='F/T/N') for sent in sentences]
-                )
-            
+        for batch_state, batch_actions in data_loader:
             q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
                 batch_selected_action, batch_q_value = \

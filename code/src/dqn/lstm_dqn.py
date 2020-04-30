@@ -20,6 +20,7 @@ from torch.optim import SGD, Adam, AdamW
 
 from .base_dqn import BaseDQN
 from data.structure import *
+from data.dataset import FeverDataset
 
 def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
         -> DataSet:
@@ -78,20 +79,25 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
             outputs = torch.cat(outputs, dim=0)
             assert outputs.size(0) == inputs['input_ids'].size(0)
         return outputs.detach().cpu().numpy().tolist()
-    
-    cached_file = os.path.join(
-        '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_lstm.pk'.format(
-            'train' if filename.find('train') != -1 else 'dev',
-            list(filter(None, args.model_name_or_path.split('/'))).pop())
-    )
+    if args.cached_file is None:
+        cached_file = os.path.join(
+            '/'.join(filename.split('/')[:-1]),
+            'cached_{}_{}_lstm'.format(
+                'train' if filename.find('train') != -1 else 'dev',
+                list(filter(None, args.model_name_or_path.split('/'))).pop())
+        )
+        if filename.find('dev') != -1:
+            cached_file += '.pk'
+    else:
+        cached_file = args.cached_file
     data = None
     if not os.path.exists(cached_file):
+        if filename.find('dev') == -1:
+            os.makedirs(cache_file, exist_ok=True)
         model.to(args.device)
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
-        skip, count = 0, 0
-        num = 5
+        skip, count, num = 0, 0, 0
         with open(filename, 'rb') as fr:
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
@@ -102,8 +108,6 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                     skip += 1
                     continue
                 count += 1
-                if count <= 50000:
-                    continue
                 
                 total_texts = [instance['claim']] + total_texts
                 semantic_embedding = feature_extractor(total_texts)
@@ -129,22 +133,26 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                                 if not is_eval else instance['evidence_set']
                 data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
                 
-                if count % 10000 == 0 and count:
-                    with open(f'{cached_file}-{num}', 'wb') as fw:
-                        pickle.dump(data, fw)
-                    args.logger.info(f'saving to {cached_file}-{num}. Skip: {skip}({skip / count})')
+                if count % 10000 == 0 and not is_eval:
+                    for item in data:
+                        with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
+                            pickle.dump(data, fw)
+                        num += 1
                     data = []
-                    num += 1
 
-            with open(cached_file, 'wb') as fw:
-                pickle.dump(data, fw)
+            if is_eval:
+                with open(cached_file, 'wb') as fw:
+                    pickle.dump(data, fw)
+            else:
+                for item in data:
+                    with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
+                        pickle.dump(data, fw)
+                    num += 1
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
-    else:
-        args.logger.info(f'Loading data from {cached_file}')
-        with open(cached_file, 'rb') as fr:
-            data = pickle.load(fr)
     del model
-    return data
+
+    dataset = FeverDataset(cached_file, label2id=args.label2id)
+    return dataset
 
 
 def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
@@ -273,12 +281,12 @@ class QNetwork(nn.Module):
         if self.aggregate == 'attn':
             # [batch, seq2, hidden_size * num_hidden_state]
             states_feature = self.attention_aggregate(actions,
-                                                        out, out,
-                                                        actions_mask,
-                                                    state_mask)
+                                                      out, out,
+                                                      actions_mask,
+                                                      state_mask)
         elif self.aggregate == 'last_step':
-        #    states_feature =
-            pass
+            last_step = state_mask.sum(dim=1).sub(1).view(-1, 1, 1).expand(-1, -1, hidden_size)
+            states_feature = out.gather(dim=1, index=last_step).expand(-1, seq2, -1)
         assert states_feature.size() == torch.Size((batch, seq2, 2 * hidden_size))
         # [batch, num_labels, hidden_size, seq2]
         ws = self.weight.unsqueeze(0).matmul(states_feature.unsqueeze(1).transpose(3, 2))

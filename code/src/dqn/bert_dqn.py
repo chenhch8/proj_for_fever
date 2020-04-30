@@ -45,6 +45,7 @@ from transformers import (
 
 from .base_dqn import BaseDQN
 from data.structure import *
+from data.dataset import FeverDataset
 
 ALL_MODELS = sum(
     (
@@ -107,11 +108,8 @@ def bert_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                 data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
-    else:
-        args.logger.info(f'Loading data from {cached_file}')
-        with open(cached_file, 'rb') as fr:
-            data = pickle.load(fr)
-    return data
+    dataset = FeverDataset(cached_file, label2id=args.label2id)
+    return dataset
 
 
 def convert_tokens_to_bert_inputs(all_tokens_a: List[int],
