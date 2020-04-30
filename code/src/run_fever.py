@@ -259,7 +259,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token)
     dev_ids = list(range(len(dev_data)))
-    epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
+    epoch_iterator = tqdm([dev_ids[i:i + 1] for i in range(len(dev_ids))],
                           disable=args.local_rank not in [-1, 0])
     results_of_q_state_seq = []
     results = []
