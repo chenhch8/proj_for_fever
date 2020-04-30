@@ -182,24 +182,23 @@ def train(args,
                                                            batch_selected_action,
                                                            batch_actions):
                     state_next, reward, done = env.step(state, selected_action)
-                    actions_next = None
-                    if not done:
-                        actions_next = \
-                                list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
-                                            actions)) if selected_action.sentence is not None else []
-                        if len(actions_next) == 0:
-                            actions_next = [Action(sentence=None, label='F/T/N')]
-                    
+                    actions_next = \
+                            list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
+                                        actions))
+                    done = done if len(actions_next) else True
+
                     data = {'item': Transition(state=state,
                                                action=selected_action,
                                                next_state=state_next,
                                                reward=reward,
-                                               next_actions=actions_next)}
+                                               next_actions=actions_next,
+                                               done=done)}
                     if args.mem.find('label') != -1:
                         data['label'] = state.label
                     memory.push(**data)
                     
                     if done: continue
+
                     batch_state_next.append(state_next)
                     batch_actions_next.append(actions_next)
                 batch_state = batch_state_next
@@ -221,6 +220,7 @@ def train(args,
                     losses.append(loss)
                     epoch_iterator.set_description('%.8f' % loss)
                     epoch_iterator.refresh()
+                
                 if len(batch_state) == 0: break
             
             if step and step % args.target_update == 0:

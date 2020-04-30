@@ -68,12 +68,13 @@ class BaseDQN:
         
         batch = Transition(*zip(*transitions))
 
-        if any([next_state != None for next_state in batch.next_state]):
+        if not all(batch.done):
             batch_state_next, batch_actions_next = \
                     list(zip(*[(next_state, next_actions) \
-                               for next_state, next_actions in zip(batch.next_state,
-                                                                   batch.next_actions) \
-                               if next_state != None]))
+                               for next_state, next_actions, done in zip(batch.next_state,
+                                                                         batch.next_actions,
+                                                                         batch.done) \
+                               if not done]))
             # max_actions, max_q_values: t_net(dqn_type=dqn)/q_net(dqn_type=ddqn)
             batch_max_action, batch_max_q_value = \
                 self.select_action(batch_state_next,
@@ -83,7 +84,7 @@ class BaseDQN:
             assert len(batch_max_action) == len(batch_state_next)
 
             # max next state_action value
-            no_final_mask = torch.tensor([next_state != None for next_state in batch.next_state],
+            no_final_mask = torch.tensor([not done for done in batch.done],
                                          dtype=torch.bool, device=self.device)
             next_state_values = torch.zeros(no_final_mask.size(), dtype=torch.float, device=self.device)
             if self.args.dqn_type == 'dqn':
@@ -112,8 +113,7 @@ class BaseDQN:
         del rewards
 
         # state_action value of q_net
-        labels = torch.tensor([action.label if state_next != None else state.pred_label \
-                                for state, action, state_next in zip(batch.state, batch.action, batch.next_state)],
+        labels = torch.tensor([action.label for action in batch.action],
                                dtype=torch.long, device=self.device).view(-1, 1)
         #state_action_values = self.q_net(
         #    **self.convert_to_inputs_for_update(batch.state, batch.action)
@@ -188,14 +188,14 @@ class BaseDQN:
         q_values = None
         with torch.no_grad():
             batch_inputs = self.convert_to_inputs_for_select_action(batch_state, batch_actions)
-            K, DIM = list(batch_inputs.values())[0].size()
-            INTERVAL = MAX_SIZE // DIM
+            K, *DIM = list(batch_inputs.values())[0].size()
+            INTERVAL = MAX_SIZE // np.prod(DIM)
             q_values = [net(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
                                        batch_inputs.items()))
                         )[0] for i in range(0, K, INTERVAL)]
             q_values = torch.cat(q_values, dim=0)
-            assert q_values.size(0) == K
+            #assert q_values.size(0) == K
         
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
@@ -227,6 +227,8 @@ class BaseDQN:
             batch_selected_action.append((action, q))
             offset += len(actions)
 
+        assert offset == q_values.size(0)
+
         return tuple(zip(*batch_selected_action))
 
 
@@ -250,7 +252,7 @@ class BaseDQN:
         state_dict = torch.load(os.path.join(input_dir, 'model.bin'),
                                 map_location=lambda storage, loc: storage)
         q_net.load_state_dict(state_dict['q_net'])
-        #self.steps_done = state_dict['steps_done']
+        self.steps_done = state_dict['steps_done']
         self.optimizer.load_state_dict(state_dict['optimizer'])
         if self.scheduler is not None and 'scheduler' in state_dict:
             self.scheduler.load_state_dict(['scheduler'])

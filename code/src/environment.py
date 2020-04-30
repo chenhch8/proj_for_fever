@@ -67,11 +67,8 @@ class ChenEnv(BaseEnv):
         super(ChenEnv, self).__init__(K)
 
     def reward(self, state: State, action: Action) -> float:
-        if self.is_done(state) or action.sentence is None:
-            if self.is_done(state):
-                cond1 = state.pred_label == state.label
-            else:
-                cond1 = state.label == action.label
+        if self.is_done(state):
+            cond1 = state.pred_label == state.label
             candidate = get_id_from_evidence(state.candidate)
             cond2 = any([len(get_id_from_evidence(evi) - candidate) == 0 \
                             for evi in state.evidence_set])
@@ -95,7 +92,7 @@ class ChenEnv(BaseEnv):
             #    return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
-        done = self.is_done(state)
-        state_next = BaseEnv.new_state(state, action) if not done else None
-        return state_next, self.reward(state, action), done
+        state_next = BaseEnv.new_state(state, action)
+        done = self.is_done(state_next)
+        return state_next, self.reward(state_next, action), done
 
