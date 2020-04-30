@@ -186,6 +186,7 @@ def train(args,
                     losses.append(loss)
                     epoch_iterator.set_description('%.8f' % loss)
                     epoch_iterator.refresh()
+                
                 if len(batch_state) == 0: break
             
             if step and step % args.target_update == 0:
