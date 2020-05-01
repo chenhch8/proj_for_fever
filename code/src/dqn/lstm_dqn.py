@@ -22,8 +22,8 @@ from .base_dqn import BaseDQN
 from data.structure import *
 from data.dataset import FeverDataset
 
-def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
-        -> DataSet:
+
+def initilize_bert(args):
     from transformers import (
         AlbertConfig,
         AlbertModel,
@@ -61,7 +61,8 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         from_tf=bool(".ckpt" in args.model_name_or_path),
         config=config,
     )
-
+    model.to(args.device)
+    
     def feature_extractor(texts: List[str]) -> List[List[float]]:
         texts = [texts[0]] + [[texts[0], text] for text in texts[1:]]
         inputs = tokenizer.batch_encode_plus(texts, max_length=256)
@@ -79,22 +80,26 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
             outputs = torch.cat(outputs, dim=0)
             assert outputs.size(0) == inputs['input_ids'].size(0)
         return outputs.detach().cpu().numpy().tolist()
-    if args.cached_file is None:
-        cached_file = os.path.join(
-            '/'.join(filename.split('/')[:-1]),
-            'cached_{}_{}_lstm'.format(
-                'train' if filename.find('train') != -1 else 'dev',
-                list(filter(None, args.model_name_or_path.split('/'))).pop())
-        )
-        if filename.find('dev') != -1:
-            cached_file += '.pk'
-    else:
-        cached_file = args.cached_file
+    
+    return feature_extractor
+
+def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
+        -> DataSet:
+    cached_file = os.path.join(
+        '/'.join(filename.split('/')[:-1]),
+        'cached_{}_{}_lstm'.format(
+            'train' if filename.find('train') != -1 else 'dev',
+            list(filter(None, args.model_name_or_path.split('/'))).pop())
+    )
+    if filename.find('dev') != -1:
+        cached_file += '.pk'
+    
     data = None
     if not os.path.exists(cached_file):
+        feature_extractor = initilize_bert(args)
+
         if filename.find('dev') == -1:
-            os.makedirs(cache_file, exist_ok=True)
-        model.to(args.device)
+            os.makedirs(cached_file, exist_ok=True)
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
         skip, count, num = 0, 0, 0
@@ -149,7 +154,6 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                         pickle.dump(data, fw)
                     num += 1
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
-    del model
 
     dataset = FeverDataset(cached_file, label2id=args.label2id)
     return dataset
@@ -202,15 +206,19 @@ class QNetwork(nn.Module):
                             batch_first=True,
                             bidirectional=bidirectional,
                             bias=True)
-        # attention paramters
-        self.attn_layer = nn.Sequential(
-            nn.Linear(
-                input_size + hidden_size * num_hidden_state,
-                hidden_size
-            ),
-            nn.ReLU(True),
-            nn.Linear(hidden_size, 1)
-        )
+        self.tanh = nn.Tanh()
+        if self.aggregate == 'attn':
+            # attention paramters
+            self.attn_layer = nn.Sequential(
+                nn.Linear(
+                    input_size + hidden_size * num_hidden_state,
+                    hidden_size
+                ),
+                nn.ReLU(True),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, 1),
+                nn.ReLU(True)
+            )
         # Value
         if dueling:
             self.value_layer = nn.Linear(
@@ -277,6 +285,7 @@ class QNetwork(nn.Module):
         seq2, num_labels = actions.size(1), 3
         # [batch, seq, hidden_size * num_hidden_state]
         out, _ = self.lstm(states)
+        out = self.tanh(out)
         assert out.size() == torch.Size((batch, seq, 2 * hidden_size))
         if self.aggregate == 'attn':
             # [batch, seq2, hidden_size * num_hidden_state]
@@ -285,7 +294,11 @@ class QNetwork(nn.Module):
                                                       actions_mask,
                                                       state_mask)
         elif self.aggregate == 'last_step':
-            last_step = state_mask.sum(dim=1).sub(1).view(-1, 1, 1).expand(-1, -1, hidden_size)
+            last_step = state_mask.sum(dim=1) \
+                            .sub(1) \
+                            .type(torch.long) \
+                            .view(-1, 1, 1) \
+                            .expand(-1, -1, 2 * hidden_size)
             states_feature = out.gather(dim=1, index=last_step).expand(-1, seq2, -1)
         assert states_feature.size() == torch.Size((batch, seq2, 2 * hidden_size))
         # [batch, num_labels, hidden_size, seq2]
@@ -325,10 +338,11 @@ class LstmDQN(BaseDQN):
         }
         # q network
         self.q_net = QNetwork(
-             input_size=HIDDEN_SIZE[model_type],
-             hidden_size=HIDDEN_SIZE[model_type],
-             num_labels=args.num_labels,
-             dueling=args.dueling
+            input_size=HIDDEN_SIZE[model_type],
+            hidden_size=HIDDEN_SIZE[model_type],
+            num_labels=args.num_labels,
+            dueling=args.dueling,
+            aggregate=args.aggregate
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net

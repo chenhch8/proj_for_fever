@@ -101,7 +101,11 @@ def train(args,
     else:
         memory = Memory[args.mem](args.capacity, args.num_labels)
     
-    data_loader = DataLoader(train_data, num_workers=1, collate_fn=collate_fn, batch_size=8, shuffle=True)
+    data_loader = DataLoader(train_data,
+                             num_workers=1,
+                             collate_fn=collate_fn,
+                             batch_size=args.train_batch_size,
+                             shuffle=True)
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
     for epoch in train_iterator:
         if epochs_trained > 0:
@@ -203,16 +207,26 @@ def train(args,
                 pickle.dump(memory, fw)
             with open(os.path.join(save_dir, 'loss.txt'), 'w') as fw:
                 fw.write('\n'.join(list(map(str, t_losses))))
+        
+        if args.do_eval:
+            scores = evaluate(args, agent, save_dir)
+            content = f'************ {epoch + 1} ************\nloss={t_loss / t_steps}\n'
+            for label in scores:
+                strict_score, label_accuracy, precision, recall, f1 = scores[label]
+                content += f'label={label}\nFEVER={strict_score}\nLA={label_accuracy}\nPre={precision}\nRecall={recall}\nF1={f1}\n'
+            with open(os.path.join(args.output_dir, 'results.txt'), 'a') as fw:
+                fw.write(content)
                 
     train_iterator.close()
 
 
-def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
+def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: FeverDataset=None):
     agent.eval()
     if dev_data is None:
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'dev.jsonl'),
-                                         agent.token)
+                                         agent.token,
+                                         is_eval=True)
     #epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
     #                      disable=args.local_rank not in [-1, 0])
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
@@ -222,7 +236,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
-        for batch_state, batch_actions in data_loader:
+        for batch_state, batch_actions in tqdm(data_loader):
             q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
                 batch_selected_action, batch_q_value = \
@@ -239,22 +253,24 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
                     actions_next = \
                             list(filter(lambda x: selected_action.sentence.id != x.sentence.id,
                                         actions)) if selected_action.sentence is not None else []
+                    
+                    batch_state_next.append(state_next)
+                    
                     if len(actions_next) == 0:
                         #actions_next = [Action(sentence=None, label='F/T/N')]
                         break
-                    
-                    batch_state_next.append(state_next)
-                    batch_actions_next.append(actions_next)
+                    else:
+                        batch_actions_next.append(actions_next)
                 
                 q_value_seq.append(batch_q_value)
                 state_seq.append(batch_state_next)
                 
-                if len(batch_state_next) == 0:
+                if len(batch_actions_next) == 0:
                     break
 
                 batch_state = batch_state_next
                 batch_actions = batch_actions_next
-                
+            
             for i in range(len(batch_state)):
                 q_state_values = [[batch_q_value[i], \
                                    (args.id2label[batch_state[i].label], args.id2label[batch_state[i].pred_label]), \
@@ -269,7 +285,6 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
 
             batch_max_t = [-1] * len(state_seq[0])
 
-            assert len(batch_max_t) == len(idxs)
             for i, max_t in enumerate(batch_max_t):
                 state = state_seq[max_t][i]
                 results.append({
@@ -293,6 +308,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: DataSet=None):
             'predicted_list': predicted_list
         }, fw)
     logger.info(f'Results are saved in {os.path.join(save_dir, "predicted_result.json")}')
+    return scores
 
 
 def run_dqn(args) -> None:
