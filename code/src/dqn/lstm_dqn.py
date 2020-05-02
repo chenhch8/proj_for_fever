@@ -287,36 +287,51 @@ class QNetwork(nn.Module):
         out, _ = self.lstm(states)
         out = self.tanh(out)
         assert out.size() == torch.Size((batch, seq, 2 * hidden_size))
+        
         if self.aggregate == 'attn':
             # [batch, seq2, hidden_size * num_hidden_state]
-            states_feature = self.attention_aggregate(actions,
+            states_feat = self.attention_aggregate(actions,
                                                       out, out,
                                                       actions_mask,
                                                       state_mask)
+            actions_num = actions_mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, 2 * hidden_size)
+            states_feat_mean = states_feat.sum(dim=1, keepdim=True).div(actions_num)
+            assert actions_num.size() == torch.Size((batch, 1, 2 * hidden_size))
         elif self.aggregate == 'last_step':
             last_step = state_mask.sum(dim=1) \
                             .sub(1) \
                             .type(torch.long) \
                             .view(-1, 1, 1) \
                             .expand(-1, -1, 2 * hidden_size)
-            states_feature = out.gather(dim=1, index=last_step).expand(-1, seq2, -1)
-        assert states_feature.size() == torch.Size((batch, seq2, 2 * hidden_size))
+            states_feat_mean = out.gather(dim=1, index=last_step)
+            states_feat = states_feat_mean.expand(-1, seq2, -1)
+        assert states_feat_mean.size() == torch.Size((batch, 1, 2 * hidden_size))
+        assert states_feat.size() == torch.Size((batch, seq2, 2 * hidden_size))
+        
         # [batch, num_labels, hidden_size, seq2]
-        ws = self.weight.unsqueeze(0).matmul(states_feature.unsqueeze(1).transpose(3, 2))
+        ws = self.weight.unsqueeze(0).matmul(states_feat.unsqueeze(1).transpose(3, 2))
         assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq2))
+        
+        # Value - [batch, seq2, num_labels]
         if self.dueling:
-            # Value - [batch, seq2, 1]
-            val_scores = self.value_layer(states_feature).expand(-1, -1, num_labels)
+            val_scores = self.value_layer(states_feat_mean)
+            assert val_scores.size() == torch.Size((batch, 1, 1))
+
+            val_scores = val_scores.expand(-1, seq2, num_labels)
             assert val_scores.size() == torch.Size((batch, seq2, num_labels))
+        
         # Advantage - [batch, seq2, num_labels]
         adv_scores = actions.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
         adv_scores = adv_scores.permute(0, 2, 1)
         assert adv_scores.size() == torch.Size((batch, seq2, num_labels))
+        
         # Q value - [batch, seq2, num_labels]
         if self.dueling:
             q_value = val_scores + adv_scores - adv_scores.mean(dim=2, keepdim=True).mean(dim=1, keepdim=True)
         else:
             q_value = adv_scores
+        assert q_value.size() == torch.Size((batch, seq2, num_labels))
+        
         # 去除padding的action对应的score
         no_pad = actions_mask.view(-1).nonzero().view(-1)
         q_value = q_value.reshape(-1, num_labels)[no_pad]
