@@ -327,7 +327,7 @@ class QNetwork(nn.Module):
         
         # Q value - [batch, seq2, num_labels]
         if self.dueling:
-            q_value = val_scores + adv_scores - adv_scores.mean(dim=2, keepdim=True).mean(dim=1, keepdim=True)
+            q_value = val_scores + adv_scores - adv_scores.mean(dim=(2, 1), keepdim=True)
         else:
             q_value = adv_scores
         assert q_value.size() == torch.Size((batch, seq2, num_labels))
