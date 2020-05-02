@@ -306,8 +306,8 @@ class QNetwork(nn.Module):
         assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq2))
         if self.dueling:
             # Value - [batch, seq2, 1]
-            val_scores = self.value_layer(states_feature)
-            assert val_scores.size() == torch.Size((batch, seq2, 1))
+            val_scores = self.value_layer(states_feature).expand(-1, -1, num_labels)
+            assert val_scores.size() == torch.Size((batch, seq2, num_labels))
         # Advantage - [batch, seq2, num_labels]
         adv_scores = actions.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
         adv_scores = adv_scores.permute(0, 2, 1)
