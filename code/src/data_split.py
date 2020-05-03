@@ -6,11 +6,13 @@ from tqdm import tqdm
 
 from data.structure import *
 
-target = '/mnt/data/chenhch8/cache_train_albert-large-v2_lstm'
-source = '/home/chenhch8/proj_for_fever/code/data/dqn/cached_train_albert-large-v2_lstm'
+target = '/home/chenhch8/proj_for_fever/code/data/dqn/cached_dev_albert-large-v2_lstm.pk'
+source = '/home/chenhch8/proj_for_fever/code/data/dqn/cached_dev_albert-large-v2_lstm.pk-bk'
 
-names = sorted(os.listdir(source), key=lambda x: int(x[:-3]))
-filenames = list(map(lambda f: os.path.join(source, f), names))
+#names = sorted(os.listdir(source), key=lambda x: int(x[:-3]))
+#filenames = list(map(lambda f: os.path.join(source, f), names))
+
+filenames = [source]
 
 count = 0
 for filename in filenames:
