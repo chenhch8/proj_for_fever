@@ -110,11 +110,11 @@ class PrioritizedReplayMemory(ReplayMemory):
 
 
 class ReplayMemoryWithLabel:
-    def __init__(self, capacity: int, num_labels: int=3) -> None:
-        capacity_per_label = capacity // num_labels
-        self.capacity = capacity_per_label * num_labels
-        self.num_labels = num_labels
-        self.replay_memories = [ReplayMemory(capacity_per_label) for _ in range(num_labels)]
+    def __init__(self, capacity: int, num_labels: int=3, proportion: List[float]=[2., 2., 1.]) -> None:
+        self.proportion = np.asarray(proportion) / sum(proportion)
+        self.capacity_per_label = list(map(int, self.proportion * capacity))
+        print('capacity_per_label: ', self.capacity_per_label)
+        self.replay_memories = [ReplayMemory(capacity) for capacity in self.capacity_per_label]
 
     def reset(self):
         for replay_memory in self.replay_memories:
@@ -124,9 +124,8 @@ class ReplayMemoryWithLabel:
         self.replay_memories[label].push(item)
 
     def sample(self, batch_size: int) -> List[Transition]:
-        sizes = [batch_size // self.num_labels] * self.num_labels
-        sizes[0] = batch_size - sizes[0] * (self.num_labels - 1)
-        random.shuffle(sizes)
+        sizes = list(map(int, batch_size * self.proportion))
+        sizes[1] = batch_size - sizes[0] - sizes[2]
         assert sum(sizes) == batch_size
         
         batch = []
@@ -141,15 +140,13 @@ class ReplayMemoryWithLabel:
 
 
 class PrioritizedReplayMemoryWithLabel(ReplayMemoryWithLabel):
-    def __init__(self, capacity: int, num_labels: int=3) -> None:
-        super(PrioritizedReplayMemoryWithLabel, self).__init__(capacity, num_labels)
-        self.replay_memories = [PrioritizedReplayMemory(self.capacity // num_labels) \
-                                    for _ in range(num_labels)]
+    def __init__(self, capacity: int, num_labels: int=3, proportion: List[float]=[2., 2., 1.]) -> None:
+        super(PrioritizedReplayMemoryWithLabel, self).__init__(capacity, num_labels, proportion)
+        self.replay_memories = [PrioritizedReplayMemory(capacity) for capacity in self.capacity_per_label]
 
     def sample(self, batch_size: int) -> Tuple[List[Tuple[int, int]], List[float], List[Transition]]:
-        sizes = [batch_size // self.num_labels] * self.num_labels
-        sizes[0] = batch_size - sizes[0] * (self.num_labels - 1)
-        random.shuffle(sizes)
+        sizes = list(map(int, batch_size * self.proportion))
+        sizes[1] = batch_size - sizes[0] - sizes[2]
         assert sum(sizes) == batch_size
         
         idxs, isweights, batch = [], [], []

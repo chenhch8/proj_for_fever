@@ -11,6 +11,7 @@ from tqdm import tqdm, trange
 from time import sleep
 from functools import reduce
 from collections import defaultdict
+import pdb
 #from multiprocessing import cpu_count, Pool
 
 import torch
@@ -24,9 +25,7 @@ from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWit
 from data.structure import *
 from data.dataset import collate_fn, FeverDataset
 from config import set_com_args, set_dqn_args, set_bert_args
-
-from scorer import fever_score
-import pdb
+from eval.calc_score import calc_fever_score, truncate_q_values
 
 logger = logging.getLogger(__name__)
 
@@ -53,40 +52,6 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def calc_fever_score(predicted_list: List[dict], true_file: str) \
-        -> Tuple[List[dict], float, float, float, float, float]:
-    ids = set(map(lambda item: int(item['id']), predicted_list))
-    logger.info('Calculating FEVER score')
-    logger.info(f'Loading true data from {true_file}')
-    with open(true_file, 'r') as fr:
-        for line in tqdm(fr.readlines()):
-            instance = json.loads(line.strip())
-            if int(instance['id']) not in ids:
-                predicted_list.append({
-                    'id': instance['id'],
-                    'label': instance['label'],
-                    'evidence': instance['evidence'],
-                    'predicted_label': 'NOT ENOUGH INFO',
-                    'predicted_evidence': []
-                })
-    assert len(predicted_list) == 19998
-    
-    predicted_list_per_label = defaultdict(list)
-    for item in predicted_list:
-        predicted_list_per_label[item['label']].append(item)
-    predicted_list_per_label = dict(predicted_list_per_label)
-
-    scores = {}
-    strict_score, label_accuracy, precision, recall, f1 = fever_score(predicted_list)
-    scores['dev'] = (strict_score, label_accuracy, precision, recall, f1)
-    logger.info(f'[Dev] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
-    for label, item in predicted_list_per_label.items():
-        strict_score, label_accuracy, precision, recall, f1 = fever_score(item)
-        scores[label] = (strict_score, label_accuracy, precision, recall, f1)
-        logger.info(f'[{label}] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
-    return predicted_list, scores
-
-
 def train(args,
           agent: Agent,
           train_data: FeverDataset,
@@ -99,7 +64,7 @@ def train(args,
     if args.mem.find('label') == -1:
         memory = Memory[args.mem](args.capacity)
     else:
-        memory = Memory[args.mem](args.capacity, args.num_labels)
+        memory = Memory[args.mem](args.capacity, args.num_labels, args.proportion)
     
     data_loader = DataLoader(train_data,
                              num_workers=0,
@@ -211,9 +176,12 @@ def train(args,
         if args.do_eval:
             scores = evaluate(args, agent, save_dir)
             content = f'************ {epoch + 1} ************\nloss={t_loss / t_steps}\n'
-            for label in scores:
-                strict_score, label_accuracy, precision, recall, f1 = scores[label]
-                content += f'label={label}\nFEVER={strict_score}\nLA={label_accuracy}\nPre={precision}\nRecall={recall}\nF1={f1}\n'
+            for thred in scores:
+                content += f'++++++++++ {thred} ++++++++++\n'
+                for label in scores[thred]:
+                    content += f'----- {label} -----\n'
+                    strict_score, label_accuracy, precision, recall, f1 = scores[label]
+                    content += f'FEVER={strict_score}\nLA={label_accuracy}\nPre={precision}\nRecall={recall}\nF1={f1}\n'
             with open(os.path.join(args.output_dir, 'results.txt'), 'a') as fw:
                 fw.write(content)
                 
@@ -227,8 +195,6 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: FeverDataset=Non
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token,
                                          is_eval=True)
-    #epoch_iterator = tqdm([dev_ids[i:i + 6] for i in range(0, len(dev_ids), 6)],
-    #                      disable=args.local_rank not in [-1, 0])
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
     epoch_iterator = tqdm(data_loader,
                           disable=args.local_rank not in [-1, 0])
@@ -300,15 +266,24 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: FeverDataset=Non
 
     with open(os.path.join(save_dir, 'decision_seq_result.json'), 'w') as fw:
         json.dump(results_of_q_state_seq, fw)
+   
+    thred_results = defaultdict(dict)
+    predicted_list, scores = calc_fever_score(results, args.dev_true_file, logger)
+    thred_results['scores']['origin'] = scores
+    thred_results['predicted_list']['origin'] = predicted_list
     
-    predicted_list, scores = calc_fever_score(results, args.dev_true_file)
+    for thred in np.arange(0, 1.01, 0.1):
+        truncate_results = truncate_q_values(results_of_q_state_seq, thred)
+        truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results, args.dev_true_file, logger)
+        thred_results['scores'][f'{thred}'] = truncate_scores
+        thred_results['predicted_list'][f'{thred}'] = truncate_predicted_list
+    thred_results = dict(thred_results)
+    
     with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
-        json.dump({
-            'scores': scores,
-            'predicted_list': predicted_list
-        }, fw)
+        json.dump(thred_results, fw)
     logger.info(f'Results are saved in {os.path.join(save_dir, "predicted_result.json")}')
-    return scores
+
+    return thred_results['scores']
 
 
 def run_dqn(args) -> None:

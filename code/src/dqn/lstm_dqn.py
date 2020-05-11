@@ -87,19 +87,17 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         -> DataSet:
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_lstm'.format(
+        'cached_{}_{}_preprocess'.format(
             'train' if filename.find('train') != -1 else 'dev',
             list(filter(None, args.model_name_or_path.split('/'))).pop())
     )
-    if filename.find('dev') != -1:
-        cached_file += '.pk'
     
     data = None
     if not os.path.exists(cached_file):
         feature_extractor = initilize_bert(args)
 
-        if filename.find('dev') == -1:
-            os.makedirs(cached_file, exist_ok=True)
+        os.makedirs(cached_file, exist_ok=True)
+        
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
         skip, count, num = 0, 0, 0
@@ -138,21 +136,17 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                                 if not is_eval else instance['evidence_set']
                 data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
                 
-                if count % 10000 == 0 and not is_eval:
+                if count % 10000 == 0:
                     for item in data:
                         with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
                             pickle.dump(data, fw)
                         num += 1
                     data = []
 
-            if is_eval:
-                with open(cached_file, 'wb') as fw:
+            for item in data:
+                with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
                     pickle.dump(data, fw)
-            else:
-                for item in data:
-                    with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
-                        pickle.dump(data, fw)
-                    num += 1
+                num += 1
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
 
     dataset = FeverDataset(cached_file, label2id=args.label2id)

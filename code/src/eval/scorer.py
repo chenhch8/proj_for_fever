@@ -104,8 +104,8 @@ def evidence_micro_precision(instance):
 
 
 def fever_score(predictions,actual=None, max_evidence=5):
-    correct = 0
-    strict = 0
+    correct = 0  # label 对
+    strict = 0   # label和evidence均对
 
     macro_precision = 0
     macro_precision_hits = 0
