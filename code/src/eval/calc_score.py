@@ -1,15 +1,19 @@
 #!/usr/bin/env python
 # coding=utf-8
 from typing import List, Tuple
+from tqdm import tqdm
+from collections import defaultdict
+import json
 
 from .scorer import fever_score
 
 
-def calc_fever_score(predicted_list: List[dict], true_file: str, logger) \
+def calc_fever_score(predicted_list: List[dict], true_file: str, logger=None) \
         -> Tuple[List[dict], float, float, float, float, float]:
     ids = set(map(lambda item: int(item['id']), predicted_list))
-    logger.info('Calculating FEVER score')
-    logger.info(f'Loading true data from {true_file}')
+    if logger:
+        logger.info('Calculating FEVER score')
+        logger.info(f'Loading true data from {true_file}')
     with open(true_file, 'r') as fr:
         for line in tqdm(fr.readlines()):
             instance = json.loads(line.strip())
@@ -31,11 +35,13 @@ def calc_fever_score(predicted_list: List[dict], true_file: str, logger) \
     scores = {}
     strict_score, label_accuracy, precision, recall, f1 = fever_score(predicted_list)
     scores['dev'] = (strict_score, label_accuracy, precision, recall, f1)
-    logger.info(f'[Dev] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
+    if logger:
+        logger.info(f'[Dev] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
     for label, item in predicted_list_per_label.items():
         strict_score, label_accuracy, precision, recall, f1 = fever_score(item)
         scores[label] = (strict_score, label_accuracy, precision, recall, f1)
-        logger.info(f'[{label}] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
+        if logger:
+            logger.info(f'[{label}] FEVER: {strict_score}\tLA: {label_accuracy}\tACC: {precision}\tRC: {recall}\tF1: {f1}')
     return predicted_list, scores
 
 

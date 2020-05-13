@@ -180,11 +180,14 @@ class BaseDQN:
                       batch_state: List[State],
                       batch_actions: List[List[Action]],
                       net: nn.Module,
-                      is_eval: bool=False) -> Tuple[List[Action], List[float]]:
+                      is_eval: bool=False,
+                      ) -> Tuple[List[Action], List[float]]:
+                      #top_k: int=1) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
         MAX_SIZE = 200 * 256
 
         if is_eval: net.eval()
+        #else: assert top_k == 1
 
         q_values = None
         with torch.no_grad():
@@ -200,20 +203,29 @@ class BaseDQN:
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
             cur_q_values = q_values[offset:offset + len(actions)]
+            #_top_k_ = min(top_k, len(actions))
             if self.epsilon_greedy or is_eval:
-                TF_q = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
-                N_q = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
-                comp = TF_q < N_q
+                TF = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
+                N = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
+                comp = TF < N
                 if torch.prod(comp):
+                    #indics = cur_q_values.view(-1).topk(k=_top_k_, largest=True)
+                    #max_actions = [(ind // self.args.num_labels, \
+                    #                ind % self.args.num_labels) for ind in indics]
                     max_action = cur_q_values.argmax().item()
                     sent_id = max_action // self.args.num_labels
                     label_id = max_action % self.args.num_labels
                 else:
                     indics = (~comp).sum(dim=1).nonzero().view(-1)
+                    #map_indics = cur_q_values[indics].view(-1).topk(k=_top_k_, largest=True)
+                    #max_actions = [(indics[ind // self.args.num_labels], \
+                    #                ind % self.args.num_labels) for ind in map_indics]
                     max_action = cur_q_values[indics].argmax().item()
                     sent_id = indics[max_action // self.args.num_labels].item()
                     label_id = max_action % self.args.num_labels
             else:
+                #max_actions = [(random.randint(0, max(0, len(actions) - 1)), \
+                #                random.randint(0, self.args.num_labels - 1)) for _ in range(top_k)]
                 sent_id = random.randint(0, max(0, len(actions) - 1))
                 label_id = random.randint(0, self.args.num_labels - 1)
             

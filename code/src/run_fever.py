@@ -20,6 +20,7 @@ import numpy as np
 
 from dqn.bert_dqn import BertDQN, bert_load_and_process_data
 from dqn.lstm_dqn import LstmDQN, lstm_load_and_process_data
+from dqn.transformer_dqn import TransformerDQN, transformer_load_and_process_data
 from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import *
@@ -30,12 +31,20 @@ from eval.calc_score import calc_fever_score, truncate_q_values
 logger = logging.getLogger(__name__)
 
 #Agent = BertDQN
-Agent = LstmDQN
-load_and_process_data = lstm_load_and_process_data
+DQN_MODE = {
+    'bert': (BertDQN, bert_load_and_process_data),
+    'lstm': (LstmDQN, lstm_load_and_process_data),
+    'transformer': (TransformerDQN, transformer_load_and_process_data)
+}
+#Agent = LstmDQN
+#load_and_process_data = lstm_load_and_process_data
 Env = ChenEnv
-Memory = {'random': ReplayMemory, 'priority': PrioritizedReplayMemory,
-          'label_random': ReplayMemoryWithLabel,
-          'label_priority': PrioritizedReplayMemoryWithLabel}
+Memory = {
+    'random': ReplayMemory,
+    'priority': PrioritizedReplayMemory,
+    'label_random': ReplayMemoryWithLabel,
+    'label_priority': PrioritizedReplayMemoryWithLabel
+}
 
 
 def set_random_seeds(random_seed):
@@ -53,7 +62,7 @@ def set_random_seeds(random_seed):
 
 
 def train(args,
-          agent: Agent,
+          agent,
           train_data: FeverDataset,
           epochs_trained: int=0,
           acc_loss_trained_in_current_epoch: float=0,
@@ -165,8 +174,8 @@ def train(args,
         acc_loss_trained_in_current_epoch = 0
         losses_trained_in_current_epoch = []
         
+        save_dir = os.path.join(args.output_dir, f'{epoch + 1}-0-{t_loss / t_steps}')
         if steps_trained_in_current_epoch == 0:
-            save_dir = os.path.join(args.output_dir, f'{epoch + 1}-0-{t_loss / t_steps}')
             agent.save(save_dir)
             with open(os.path.join(save_dir, 'memory.pk'), 'wb') as fw:
                 pickle.dump(memory, fw)
@@ -180,15 +189,15 @@ def train(args,
                 content += f'++++++++++ {thred} ++++++++++\n'
                 for label in scores[thred]:
                     content += f'----- {label} -----\n'
-                    strict_score, label_accuracy, precision, recall, f1 = scores[label]
+                    strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
                     content += f'FEVER={strict_score}\nLA={label_accuracy}\nPre={precision}\nRecall={recall}\nF1={f1}\n'
-            with open(os.path.join(args.output_dir, 'results.txt'), 'a') as fw:
+            with open(os.path.join(save_dir, 'results.txt'), 'a') as fw:
                 fw.write(content)
                 
     train_iterator.close()
 
 
-def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: FeverDataset=None):
+def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
     agent.eval()
     if dev_data is None:
         dev_data = load_and_process_data(args,
@@ -268,13 +277,15 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: FeverDataset=Non
         json.dump(results_of_q_state_seq, fw)
    
     thred_results = defaultdict(dict)
-    predicted_list, scores = calc_fever_score(results, args.dev_true_file, logger)
+    predicted_list, scores = calc_fever_score(results, args.dev_true_file, logger=None)
     thred_results['scores']['origin'] = scores
     thred_results['predicted_list']['origin'] = predicted_list
     
     for thred in np.arange(0, 1.01, 0.1):
         truncate_results = truncate_q_values(results_of_q_state_seq, thred)
-        truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results, args.dev_true_file, logger)
+        truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results,
+                                                                    args.dev_true_file,
+                                                                    logger=None)
         thred_results['scores'][f'{thred}'] = truncate_scores
         thred_results['predicted_list'][f'{thred}'] = truncate_predicted_list
     thred_results = dict(thred_results)
@@ -287,6 +298,7 @@ def evaluate(args: dict, agent: Agent, save_dir: str, dev_data: FeverDataset=Non
 
 
 def run_dqn(args) -> None:
+    Agent, load_and_process_data = DQN_MODE[args.dqn_mode]
     agent = Agent(args)
     agent.to(args.device)
     if args.do_train:

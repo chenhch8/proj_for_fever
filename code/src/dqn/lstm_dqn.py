@@ -139,14 +139,15 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                 if count % 10000 == 0:
                     for item in data:
                         with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
-                            pickle.dump(data, fw)
+                            pickle.dump(item, fw)
                         num += 1
                     data = []
 
             for item in data:
                 with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
-                    pickle.dump(data, fw)
+                    pickle.dump(item, fw)
                 num += 1
+                data = []
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
 
     dataset = FeverDataset(cached_file, label2id=args.label2id)
@@ -224,9 +225,9 @@ class QNetwork(nn.Module):
                                              hidden_size,
                                              hidden_size * num_hidden_state))
         self.bias = Parameter(torch.Tensor(num_labels))
-        self.reset_parameters()
+        self.init_parameters()
 
-    def reset_parameters(self):
+    def init_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
         if self.bias is not None:
             feature_in = self.weight.size(2)
@@ -351,7 +352,8 @@ class LstmDQN(BaseDQN):
             hidden_size=HIDDEN_SIZE[model_type],
             num_labels=args.num_labels,
             dueling=args.dueling,
-            aggregate=args.aggregate
+            aggregate=args.aggregate,
+            num_layers=args.num_layers
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net

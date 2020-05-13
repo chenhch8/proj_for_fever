@@ -96,8 +96,11 @@ def set_com_args(parser) -> None:
 
 def set_dqn_args(parser) -> None:
     parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
+    parser.add_argument('--dqn_mode', default='lstm', choices=['bert', 'lstm', 'transformer'])
     parser.add_argument('--dueling', action='store_true')
     parser.add_argument('--aggregate', default='attn', type=str, choices=['attn', 'last_step'])
+    parser.add_argument('--nhead', default=8, type=int)
+    parser.add_argument('--num_layers', default=3, type=int)
     # replay memory
     parser.add_argument('--capacity', default=200000, type=int)
     # discount factor
@@ -111,7 +114,7 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--tau', default=1., type=float)
 
     parser.add_argument('--mem', default='label_priority', choices=['random', 'priority', 'label_random', 'label_priority'])
-    parser.add_argument('--proportion', default=[2, 2, 1], nargs=3, type=float)
+    parser.add_argument('--proportion', default=[1, 1, 1], nargs=3, type=float)
 
 def set_bert_args(parser) -> None:
     from dqn.bert_dqn import MODEL_CLASSES
