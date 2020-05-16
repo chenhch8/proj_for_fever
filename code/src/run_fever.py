@@ -188,9 +188,8 @@ def train(args,
             for thred in scores:
                 content += f'++++++++++ {thred} ++++++++++\n'
                 for label in scores[thred]:
-                    content += f'----- {label} -----\n'
-                    strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
-                    content += f'FEVER={strict_score}\nLA={label_accuracy}\nPre={precision}\nRecall={recall}\nF1={f1}\n'
+                    #strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
+                    content += f'{label}\t{scores[thred][label]}\n'
             with open(os.path.join(save_dir, 'results.txt'), 'a') as fw:
                 fw.write(content)
                 
@@ -200,6 +199,7 @@ def train(args,
 def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
     agent.eval()
     if dev_data is None:
+        _, load_and_process_data = DQN_MODE[args.dqn_mode]
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'dev.jsonl'),
                                          agent.token,
@@ -211,7 +211,7 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
-        for batch_state, batch_actions in tqdm(data_loader):
+        for batch_state, batch_actions in epoch_iterator:
             q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
                 batch_selected_action, batch_q_value = \

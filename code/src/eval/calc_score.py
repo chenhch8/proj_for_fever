@@ -49,9 +49,9 @@ def truncate_q_values(predicted_state_seq: List, thred: float=0.1):
     predicted_list = []
     for idx, state_seq in predicted_state_seq:
         score_seq = [score for score, _, _, _ in state_seq]
-        score_gap = [score_seq[t] - score[t - 1] for t in range(len(score_seq) - 1, 1, -1)] # cur - pre
+        score_gap = [score_seq[t] - score_seq[t - 1] for t in range(1, len(score_seq))] # cur - pre
         ptr = len(score_seq) - 1
-        for t in range(ptr, -1, -1):
+        for t in range(len(score_gap) - 1, -1, -1):
             if score_gap[t] >= -thred and score_gap[t] <= thred:
                 ptr = t
             else:
