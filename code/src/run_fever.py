@@ -184,13 +184,21 @@ def train(args,
         
         if args.do_eval:
             scores = evaluate(args, agent, save_dir)
-            content = f'************ {epoch + 1} ************\nloss={t_loss / t_steps}\n'
+            
+            content = ''
             for thred in scores:
-                content += f'++++++++++ {thred} ++++++++++\n'
+                if thred == 'origin': continue
+                content += '*' * 20 + ' %.1f ' % thred + '*' * 20 + '\n'
                 for label in scores[thred]:
                     #strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
                     content += f'{label}\t{scores[thred][label]}\n'
             with open(os.path.join(save_dir, 'results.txt'), 'a') as fw:
+                fw.write(content)
+            
+            content = '*' * 20 + ' %d ' % (epoch + 1) + '*' * 20 + f'\nloss={t_loss / t_steps}\n'
+            for label in scores['origin']:
+                content += f'{label}\t{scores["origin"][label]}\n'
+            with open(os.path.join(args.output_dir, 'results.txt'), 'a') as fw:
                 fw.write(content)
                 
     train_iterator.close()
