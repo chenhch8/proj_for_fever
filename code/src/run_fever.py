@@ -188,7 +188,7 @@ def train(args,
             content = ''
             for thred in scores:
                 if thred == 'origin': continue
-                content += '*' * 20 + ' %.1f ' % thred + '*' * 20 + '\n'
+                content += '*' * 20 + ' %0.5f ' % float(thred) + '*' * 20 + '\n'
                 for label in scores[thred]:
                     #strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
                     content += f'{label}\t{scores[thred][label]}\n'
@@ -289,7 +289,7 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
     thred_results['scores']['origin'] = scores
     thred_results['predicted_list']['origin'] = predicted_list
     
-    for thred in np.arange(0, 1.01, 0.1):
+    for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
         truncate_results = truncate_q_values(results_of_q_state_seq, thred)
         truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results,
                                                                     args.dev_true_file,

@@ -115,6 +115,7 @@ def set_dqn_args(parser) -> None:
 
     parser.add_argument('--mem', default='label_priority', choices=['random', 'priority', 'label_random', 'label_priority'])
     parser.add_argument('--proportion', default=[1, 1, 1], nargs=3, type=float)
+    parser.add_argument('--pred_thred', default=0.1, type=float)
 
 def set_bert_args(parser) -> None:
     from dqn.bert_dqn import MODEL_CLASSES
