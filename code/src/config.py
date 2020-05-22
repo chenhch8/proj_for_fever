@@ -98,7 +98,7 @@ def set_dqn_args(parser) -> None:
     parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
     parser.add_argument('--dqn_mode', default='lstm', choices=['bert', 'lstm', 'transformer'])
     parser.add_argument('--dueling', action='store_true')
-    parser.add_argument('--aggregate', default='attn', type=str, choices=['attn', 'last_step'])
+    parser.add_argument('--aggregate', default='attn_mean', type=str, choices=['attn_mean', 'attn_max', 'last_step'])
     parser.add_argument('--nhead', default=8, type=int)
     parser.add_argument('--num_layers', default=3, type=int)
     # replay memory

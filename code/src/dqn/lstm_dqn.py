@@ -187,7 +187,7 @@ class QNetwork(nn.Module):
                  bidirectional=True,
                  num_layers=3,
                  dueling=True,
-                 aggregate='attn'):
+                 aggregate='attn_mean'):
         super(QNetwork, self).__init__()
         if hidden_size is None:
             hidden_size = input_size
@@ -283,15 +283,21 @@ class QNetwork(nn.Module):
         out = self.tanh(out)
         assert out.size() == torch.Size((batch, seq, 2 * hidden_size))
         
-        if self.aggregate == 'attn':
+        if self.aggregate.find('attn') != -1:
             # [batch, seq2, hidden_size * num_hidden_state]
             states_feat = self.attention_aggregate(actions,
-                                                      out, out,
-                                                      actions_mask,
-                                                      state_mask)
-            actions_num = actions_mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, 2 * hidden_size)
-            states_feat_mean = states_feat.sum(dim=1, keepdim=True).div(actions_num)
-            assert actions_num.size() == torch.Size((batch, 1, 2 * hidden_size))
+                                                   out, out,
+                                                   actions_mask,
+                                                   state_mask)
+            if self.aggregate.find('mean') != -1
+                actions_num = actions_mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, 2 * hidden_size)
+                states_feat_mean = states_feat.sum(dim=1, keepdim=True).div(actions_num)
+                assert actions_num.size() == torch.Size((batch, 1, 2 * hidden_size))
+            elif self.aggregate.find('max') != -1:
+                states_feat_mean = states_feat \
+                                    .masked_fill(acions_mask.unsqueeze(2) == 0,
+                                                 float('-inf')) \
+                                    .max(dim=1, keepdim=True)
         elif self.aggregate == 'last_step':
             last_step = state_mask.sum(dim=1) \
                             .sub(1) \
