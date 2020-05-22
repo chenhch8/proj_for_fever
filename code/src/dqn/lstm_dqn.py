@@ -191,7 +191,7 @@ class QNetwork(nn.Module):
         super(QNetwork, self).__init__()
         if hidden_size is None:
             hidden_size = input_size
-        num_hidden_state = 2 if bidirectional else 1
+        self.num_hidden_state = 2 if bidirectional else 1
         self.dueling = dueling
         self.aggregate = aggregate
         self.lstm = nn.LSTM(input_size=input_size,
@@ -206,7 +206,7 @@ class QNetwork(nn.Module):
             # attention paramters
             self.attn_layer = nn.Sequential(
                 nn.Linear(
-                    input_size + hidden_size * num_hidden_state,
+                    input_size + hidden_size * self.num_hidden_state,
                     hidden_size
                 ),
                 nn.ReLU(True),
@@ -217,13 +217,13 @@ class QNetwork(nn.Module):
         # Value
         if dueling:
             self.value_layer = nn.Linear(
-                hidden_size * num_hidden_state,
+                hidden_size * self.num_hidden_state,
                 1
             )
         # Advantage
         self.weight = Parameter(torch.Tensor(num_labels,
                                              hidden_size,
-                                             hidden_size * num_hidden_state))
+                                             hidden_size * self.num_hidden_state))
         self.bias = Parameter(torch.Tensor(num_labels))
         self.init_parameters()
 
@@ -264,7 +264,23 @@ class QNetwork(nn.Module):
         attn = A.div(A_sum)
         assert A.size() == torch.Size((batch, seq1, seq2))
         return attn.matmul(value)
-        
+
+
+    def calc_state_semantic(self, features, mask, mode):
+        batch, _, hidden_size = features.size()
+        if mode == 'mean':
+            num = mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, hidden_size)
+            state_semantic = features.sum(dim=1, keepdim=True).div(num)
+            assert num.size() == torch.Size((batch, 1, hidden_size))
+        elif mode == 'max':
+            state_semantic = features \
+                                .masked_fill(mask.unsqueeze(2) == 0,
+                                             float('-inf')) \
+                                .max(dim=1, keepdim=True)[0]
+        else:
+            raise ValueError('mode error')
+        return state_semantic
+
 
     def forward(self, states, state_mask, actions, actions_mask):
         '''
@@ -281,7 +297,7 @@ class QNetwork(nn.Module):
         # [batch, seq, hidden_size * num_hidden_state]
         out, _ = self.lstm(states)
         out = self.tanh(out)
-        assert out.size() == torch.Size((batch, seq, 2 * hidden_size))
+        assert out.size() == torch.Size((batch, seq, self.num_hidden_state * hidden_size))
         
         if self.aggregate.find('attn') != -1:
             # [batch, seq2, hidden_size * num_hidden_state]
@@ -289,25 +305,21 @@ class QNetwork(nn.Module):
                                                    out, out,
                                                    actions_mask,
                                                    state_mask)
-            if self.aggregate.find('mean') != -1:
-                actions_num = actions_mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, 2 * hidden_size)
-                states_feat_mean = states_feat.sum(dim=1, keepdim=True).div(actions_num)
-                assert actions_num.size() == torch.Size((batch, 1, 2 * hidden_size))
-            elif self.aggregate.find('max') != -1:
-                states_feat_mean = states_feat \
-                                    .masked_fill(actions_mask.unsqueeze(2) == 0,
-                                                 float('-inf')) \
-                                    .max(dim=1, keepdim=True)[0]
-        elif self.aggregate == 'last_step':
-            last_step = state_mask.sum(dim=1) \
-                            .sub(1) \
-                            .type(torch.long) \
-                            .view(-1, 1, 1) \
-                            .expand(-1, -1, 2 * hidden_size)
-            states_feat_mean = out.gather(dim=1, index=last_step)
-            states_feat = states_feat_mean.expand(-1, seq2, -1)
-        assert states_feat_mean.size() == torch.Size((batch, 1, 2 * hidden_size))
-        assert states_feat.size() == torch.Size((batch, seq2, 2 * hidden_size))
+            state_semantic = self.calc_state_semantic(states_feat, actions_mask,
+                                                      'mean' if self.aggregate.find('mean') != -1 else 'max')
+        else:
+            if self.aggregate in {'max', 'mean'}:
+                state_semantic = self.calc_state_semantic(out, state_mask, self.aggregate)
+            elif self.aggregate == 'last':
+                last_step = state_mask.sum(dim=1) \
+                                .sub(1) \
+                                .type(torch.long) \
+                                .view(-1, 1, 1) \
+                                .expand(-1, -1, 2 * hidden_size)
+                state_semantic = out.gather(dim=1, index=last_step)
+            states_feat = state_semantic.expand(-1, seq2, -1)
+        assert state_semantic.size() == torch.Size((batch, 1, self.num_hidden_state * hidden_size))
+        assert states_feat.size() == torch.Size((batch, seq2, self.num_hidden_state * hidden_size))
         
         # [batch, num_labels, hidden_size, seq2]
         ws = self.weight.unsqueeze(0).matmul(states_feat.unsqueeze(1).transpose(3, 2))
@@ -315,7 +327,7 @@ class QNetwork(nn.Module):
         
         # Value - [batch, seq2, num_labels]
         if self.dueling:
-            val_scores = self.value_layer(states_feat_mean)
+            val_scores = self.value_layer(state_semantic)
             assert val_scores.size() == torch.Size((batch, 1, 1))
 
             val_scores = val_scores.expand(-1, seq2, num_labels)
