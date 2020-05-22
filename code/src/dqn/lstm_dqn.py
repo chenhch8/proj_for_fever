@@ -202,7 +202,7 @@ class QNetwork(nn.Module):
                             bidirectional=bidirectional,
                             bias=True)
         self.tanh = nn.Tanh()
-        if self.aggregate == 'attn':
+        if self.aggregate.find('attn') != -1:
             # attention paramters
             self.attn_layer = nn.Sequential(
                 nn.Linear(
@@ -289,15 +289,15 @@ class QNetwork(nn.Module):
                                                    out, out,
                                                    actions_mask,
                                                    state_mask)
-            if self.aggregate.find('mean') != -1
+            if self.aggregate.find('mean') != -1:
                 actions_num = actions_mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, 2 * hidden_size)
                 states_feat_mean = states_feat.sum(dim=1, keepdim=True).div(actions_num)
                 assert actions_num.size() == torch.Size((batch, 1, 2 * hidden_size))
             elif self.aggregate.find('max') != -1:
                 states_feat_mean = states_feat \
-                                    .masked_fill(acions_mask.unsqueeze(2) == 0,
+                                    .masked_fill(actions_mask.unsqueeze(2) == 0,
                                                  float('-inf')) \
-                                    .max(dim=1, keepdim=True)
+                                    .max(dim=1, keepdim=True)[0]
         elif self.aggregate == 'last_step':
             last_step = state_mask.sum(dim=1) \
                             .sub(1) \
