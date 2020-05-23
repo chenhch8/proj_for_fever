@@ -362,7 +362,8 @@ class LstmDQN(BaseDQN):
         HIDDEN_SIZE = {
             'bert-base-uncased': 768,
             'bert-base-cased': 768,
-            'albert-large-v2': 1024
+            'albert-large-v2': 1024,
+            'gear-pretrained': 768
         }
         # q network
         self.q_net = QNetwork(
