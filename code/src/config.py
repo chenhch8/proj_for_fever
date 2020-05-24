@@ -9,8 +9,10 @@ def set_com_args(parser) -> None:
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",
     )
     parser.add_argument(
-        "--checkpoint",
-        default=None
+        "--checkpoints",
+        default=None,
+        nargs='+',
+        type=str
     )
     parser.add_argument(
         "--output_dir",

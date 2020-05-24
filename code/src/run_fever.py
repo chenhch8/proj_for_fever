@@ -204,12 +204,12 @@ def train(args,
     train_iterator.close()
 
 
-def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
+def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_eval: bool=True):
     agent.eval()
     if dev_data is None:
         _, load_and_process_data = DQN_MODE[args.dqn_mode]
         dev_data = load_and_process_data(args,
-                                         os.path.join(args.data_dir, 'dev.jsonl'),
+                                         os.path.join(args.data_dir, 'dev.jsonl' if is_eval else 'test.jsonl'),
                                          agent.token)
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
     epoch_iterator = tqdm(data_loader,
@@ -255,8 +255,8 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
             
             for i in range(len(batch_state)):
                 q_state_values = [[batch_q_value[i], \
-                                   (args.id2label[batch_state[i].label], args.id2label[batch_state[i].pred_label]), \
-                                   batch_state[i].evidence_set, \
+                                   (args.id2label[batch_state[i].label] if is_eval else None, args.id2label[batch_state[i].pred_label]), \
+                                   batch_state[i].evidence_set if is_eval else None, \
                                    reduce(lambda seq1, seq2: seq1 + seq2,
                                           map(lambda sent: [list(sent.id)],
                                               batch_state[i].candidate)) if len(batch_state[i].candidate) else [], \
@@ -271,8 +271,8 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
                 state = state_seq[max_t][i]
                 results.append({
                     'id': state.claim.id,
-                    'label': args.id2label[state.label],
-                    'evidence': state.evidence_set,
+                    'label': args.id2label[state.label] if is_eval else None,
+                    'evidence': state.evidence_set if is_eval else None,
                     'predicted_label': args.id2label[state.pred_label],
                     'predicted_evidence': \
                         reduce(lambda seq1, seq2: seq1 + seq2,
@@ -280,9 +280,18 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
                             if len(state.candidate) else []
                 })
 
-    with open(os.path.join(save_dir, 'decision_seq_result.json'), 'w') as fw:
-        json.dump(results_of_q_state_seq, fw)
-   
+    name = 'decision_seq_result.json'
+    if not is_eval:
+        name = f'test-{name}'
+    with open(os.path.join(save_dir, name), 'w') as fw:
+        json.dump({
+            'results_of_q_state_seq': results_of_q_state_seq,
+            'results_of_last_step': results
+        }, fw)
+    
+    if not is_eval:
+        return
+    
     thred_results = defaultdict(dict)
     predicted_list, scores = calc_fever_score(results, args.dev_true_file, logger=None)
     thred_results['scores']['origin'] = scores
@@ -334,13 +343,22 @@ def run_dqn(args) -> None:
               steps_trained_in_current_epoch,
               losses_trained_in_current_epoch)
         
-    if args.do_eval:
-        assert args.checkpoint is not None
-        agent.load(args.checkpoint)
-        dev_data = load_and_process_data(args,
-                                         os.path.join(args.data_dir, 'dev.jsonl'),
-                                         agent.token)
-        evaluate(args, agent, args.checkpoint, dev_data)
+    if args.do_eval or args.do_test:
+        assert args.checkpoints is not None
+        if args.do_eval:
+            dev_data = load_and_process_data(args,
+                                             os.path.join(args.data_dir, 'dev.jsonl'),
+                                             agent.token)
+        if args.do_test:
+            test_data = load_and_process_data(args,
+                                              os.path.join(args.data_dir, 'test.jsonl'),
+                                              agent.token)
+        for checkpoint in args.checkpoints:
+            agent.load(checkpoint)
+            if args.do_eval:
+                evaluate(args, agent, checkpoint, dev_data, is_eval=True)
+            if args.do_test:
+                evaluate(args, agent, checkpoint, test_data, is_eval=False)
 
 
 def main() -> None:
