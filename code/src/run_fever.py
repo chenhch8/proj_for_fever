@@ -20,6 +20,7 @@ import numpy as np
 
 from dqn.bert_dqn import BertDQN, bert_load_and_process_data
 from dqn.lstm_dqn import LstmDQN, lstm_load_and_process_data
+from dqn.ggnn_dqn import GGNNDQN, ggnn_load_and_process_data
 from dqn.transformer_dqn import TransformerDQN, transformer_load_and_process_data
 from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 DQN_MODE = {
     'bert': (BertDQN, bert_load_and_process_data),
     'lstm': (LstmDQN, lstm_load_and_process_data),
+    'ggnn': (GGNNDQN, ggnn_load_and_process_data)
     'transformer': (TransformerDQN, transformer_load_and_process_data)
 }
 #Agent = LstmDQN
