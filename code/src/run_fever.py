@@ -90,7 +90,7 @@ def train(args,
                               desc='Loss',
                               disable=args.local_rank not in [-1, 0])
         
-        log_per_steps = len(epoch_iterator) // 10
+        log_per_steps = len(epoch_iterator) // 5
 
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
         t_losses, losses = losses_trained_in_current_epoch, []
@@ -210,8 +210,7 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None):
         _, load_and_process_data = DQN_MODE[args.dqn_mode]
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'dev.jsonl'),
-                                         agent.token,
-                                         is_eval=True)
+                                         agent.token)
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
     epoch_iterator = tqdm(data_loader,
                           disable=args.local_rank not in [-1, 0])
@@ -340,8 +339,7 @@ def run_dqn(args) -> None:
         agent.load(args.checkpoint)
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'dev.jsonl'),
-                                         agent.token,
-                                         is_eval=True)
+                                         agent.token)
         evaluate(args, agent, args.checkpoint, dev_data)
 
 

@@ -75,11 +75,18 @@ MODEL_CLASSES = {
     "flaubert": (FlaubertConfig, FlaubertForSequenceClassification, FlaubertTokenizer),
 }
 
-def bert_load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
+def bert_load_and_process_data(args: dict, filename: str, token_fn: 'function') \
         -> DataSet:
+    if filename.find('train') != -1:
+        mode = 'train'
+    elif filename.find('dev') != -1:
+        mode = 'dev'
+    else:
+        mode = 'test'
+
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_{}.pk'.format('train' if filename.find('train') != -1 else 'dev',
+        'cached_{}_{}_{}.pk'.format(mode,
                                     list(filter(None, args.model_name_or_path.split('/'))).pop(),
                                     args.max_sent_length)
     )
@@ -101,11 +108,18 @@ def bert_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                                                   str=sentence,
                                                   tokens=token_fn(sentence, max_length=args.max_sent_length)))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
-                evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
-                                    for title, line_num in evi] \
-                                        for evi in instance['evidence_set']] \
-                                if not is_eval else instance['evidence_set']
-                data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
+                if mode == 'train':
+                    label = args.label2id[instance['label']]
+                    evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
+                                        for title, line_num in evi] \
+                                            for evi in instance['evidence_set']]
+                elif mode == 'dev':
+                    label = args.label2id[instance['label']]
+                    evidence_set = instance['evidence_set']
+                else:
+                    label = None
+                    evidence_set = None
+                data.append((claim, label, evidence_set, sentences))
             with open(cached_file, 'wb') as fw:
                 pickle.dump(data, fw)
     dataset = FeverDataset(cached_file, label2id=args.label2id)

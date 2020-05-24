@@ -45,7 +45,7 @@ def calc_fever_score(predicted_list: List[dict], true_file: str, logger=None) \
     return predicted_list, scores
 
 
-def truncate_q_values(predicted_state_seq: List, thred: float=0.1):
+def truncate_q_values(predicted_state_seq: List, thred: float=0.1, is_test: bool=False):
     predicted_list = []
     for idx, state_seq in predicted_state_seq:
         score_seq = [score for score, _, _, _ in state_seq]
@@ -60,6 +60,10 @@ def truncate_q_values(predicted_state_seq: List, thred: float=0.1):
             'id': idx,
             'label': state_seq[ptr][1][0],
             'evidence': state_seq[ptr][2],
+            'predicted_label': state_seq[ptr][1][1],
+            'predicted_evidence': state_seq[ptr][3]
+        } if not is_test else {
+            'id': idx,
             'predicted_label': state_seq[ptr][1][1],
             'predicted_evidence': state_seq[ptr][3]
         })

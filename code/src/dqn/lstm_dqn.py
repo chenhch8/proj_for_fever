@@ -83,13 +83,20 @@ def initilize_bert(args):
     
     return feature_extractor
 
-def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', is_eval=False) \
+def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') \
         -> DataSet:
+    if filename.find('train') != -1:
+        mode = 'train'
+    elif filename.find('dev') != -1:
+        mode = 'dev'
+    else:
+        mode = 'test'
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
         'cached_{}_{}_preprocess'.format(
-            'train' if filename.find('train') != -1 else 'dev',
-            list(filter(None, args.model_name_or_path.split('/'))).pop())
+            mode,
+            list(filter(None, args.model_name_or_path.split('/'))).pop()
+        )
     )
     
     data = None
@@ -107,7 +114,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                 
                 total_texts = [sentence for _, text in instance['documents'].items() \
                                             for _, sentence in text.items()]
-                if not is_eval and len(total_texts) < 5:
+                if mode == 'train' and len(total_texts) < 5:
                     skip += 1
                     continue
                 count += 1
@@ -130,11 +137,18 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                         text_id += 1
                 assert text_id == len(semantic_embedding)
                 
-                evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
-                                    for title, line_num in evi] \
-                                        for evi in instance['evidence_set']] \
-                                if not is_eval else instance['evidence_set']
-                data.append((claim, args.label2id[instance['label']], evidence_set, sentences))
+                if mode == 'train':
+                    label = args.label2id[instance['label']]
+                    evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
+                                        for title, line_num in evi] \
+                                            for evi in instance['evidence_set']] \
+                                    if not is_eval else instance['evidence_set']
+                elif mode == 'dev':
+                    label = args.label2id[instance['label']]
+                    evidence_set = instance['evidence_set']
+                else:
+                    label = evidence_set = None
+                data.append((claim, label, evidence_set, sentences))
                 
                 if count % 10000 == 0:
                     for item in data:
