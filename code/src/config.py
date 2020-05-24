@@ -53,6 +53,7 @@ def set_com_args(parser) -> None:
     )
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
+    parser.add_argument("--do_test", action="store_true", help="Whether to run eval on the test set.")
     parser.add_argument(
         #"--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model.",
         "--do_lower_case", type=int, choices=[0, 1], help="Set this flag if you are using an uncased model.",
