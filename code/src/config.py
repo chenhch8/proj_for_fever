@@ -99,7 +99,7 @@ def set_com_args(parser) -> None:
 
 def set_dqn_args(parser) -> None:
     parser.add_argument('--dqn_type', default='ddqn', choices=['dqn', 'ddqn'])
-    parser.add_argument('--dqn_mode', default='lstm', choices=['bert', 'lstm', 'transformer'])
+    parser.add_argument('--dqn_mode', default='lstm', choices=['bert', 'lstm', 'transformer', 'ggnn'])
     parser.add_argument('--dueling', action='store_true')
     parser.add_argument('--aggregate', default='attn_mean', type=str, choices=['attn', 'attn_mean', 'attn_max', 'last', 'mean', 'max'])
     parser.add_argument('--nhead', default=8, type=int)
