@@ -31,6 +31,9 @@ def initilize_bert(args):
         BertConfig,
         BertModel,
         BertTokenizer,
+        XLNetConfig,
+        XLNetTokenizer,
+        XLNetModel
     )
     
     ALL_MODELS = sum(
@@ -46,6 +49,7 @@ def initilize_bert(args):
 
     MODEL_CLASSES = {
         "bert": (BertConfig, BertModel, BertTokenizer),
+        "xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
         "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
     }
     
