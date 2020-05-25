@@ -78,7 +78,7 @@ def train(args,
         memory = Memory[args.mem](args.capacity, args.num_labels, args.proportion)
     
     data_loader = DataLoader(train_data,
-                             num_workers=0,
+                             num_workers=1,
                              collate_fn=collate_fn,
                              batch_size=args.train_batch_size,
                              shuffle=True)
