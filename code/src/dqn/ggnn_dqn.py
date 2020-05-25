@@ -42,7 +42,7 @@ def convert_tensor_to_ggnn_inputs(batch_state_tensor: List[torch.Tensor],
                              dtype=torch.float)
     actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
                                 dtype=torch.float)
-    adj_matrix = torch.tensor([[[1] * size + [0] * (s_max - size) \
+    adj_matrix = torch.tensor([[[1. / size] * size + [0] * (s_max - size) \
                                 if i < size else [0] * s_max \
                                 for i in range(s_max)] for size in state_len],
                               dtype=torch.float)
@@ -67,29 +67,31 @@ class QNetwork(nn.Module):
         super(QNetwork, self).__init__()
         if hidden_size is None:
             hidden_size = input_size
+        self.n_steps = n_steps
+        self.aggregate = aggregate
+        self.dueling = dueling
+        
         #GGNN
         self.reset_gate = nn.Sequential(
             nn.Linear(2 * hidden_size, hidden_size),
-            nn.Sigmoid(True),
+            nn.Sigmoid(),
         )
         self.update_gate = nn.Sequential(
             nn.Linear(2 * hidden_size, hidden_size),
-            nn.Sigmoid(True),
+            nn.Sigmoid(),
         )
         self.transform = nn.Sequential(
             nn.Linear(2 * hidden_size, hidden_size),
-            nn.Tanh(True),
+            nn.Tanh(),
             nn.Dropout(dropout)
         )
-        self.n_steps = n_steps
-        
         self.node_fc = nn.Linear(hidden_size, hidden_size)
 
         if self.aggregate.find('attn') != -1:
             # attention paramters
             self.attn_layer = nn.Sequential(
                 nn.Linear(
-                    input_size + hidden_size * self.num_hidden_state,
+                    hidden_size * 2,
                     hidden_size
                 ),
                 nn.ReLU(True),
@@ -99,14 +101,11 @@ class QNetwork(nn.Module):
             )
         # Value
         if dueling:
-            self.value_layer = nn.Linear(
-                hidden_size * self.num_hidden_state,
-                1
-            )
+            self.value_layer = nn.Linear(hidden_size, 1)
         # Advantage
         self.weight = Parameter(torch.Tensor(num_labels,
                                              hidden_size,
-                                             hidden_size * self.num_hidden_state))
+                                             hidden_size))
         self.bias = Parameter(torch.Tensor(num_labels))
         self.init_parameters()
 
@@ -131,11 +130,11 @@ class QNetwork(nn.Module):
         for step in range(self.n_steps):
             prop_hidden_state = self.node_fc(hidden_state)
             # propagate
-            a = A.matmul(torch.cat((prop_hidden_state, hidden_state), dim=2))
+            a = adj_matrix.matmul(torch.cat((prop_hidden_state, hidden_state), dim=2))
             # update
             z = self.update_gate(a)
             r = self.reset_gate(a)
-            h_hat = self.transform(torch.cat((prop_hidden_state, r * hidden_size), dim=2))
+            h_hat = self.transform(torch.cat((prop_hidden_state, r * hidden_state), dim=2))
             hidden_state = (1 - z) * hidden_state + z * h_hat
         return hidden_state
 
@@ -221,13 +220,37 @@ class QNetwork(nn.Module):
                                 .expand(-1, -1, 2 * hidden_size)
                 state_semantic = out.gather(dim=1, index=last_step)
             states_feat = state_semantic.expand(-1, seq2, -1)
-        assert state_semantic.size() == torch.Size((batch, 1, self.num_hidden_state * hidden_size))
-        assert states_feat.size() == torch.Size((batch, seq2, self.num_hidden_state * hidden_size))
+        assert state_semantic.size() == torch.Size((batch, 1, hidden_size))
+        assert states_feat.size() == torch.Size((batch, seq2, hidden_size))
         
         # [batch, num_labels, hidden_size, seq2]
         ws = self.weight.unsqueeze(0).matmul(states_feat.unsqueeze(1).transpose(3, 2))
         assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq2))
 
+        # Value - [batch, seq2, num_labels]
+        if self.dueling:
+            val_scores = self.value_layer(state_semantic)
+            assert val_scores.size() == torch.Size((batch, 1, 1))
+
+            val_scores = val_scores.expand(-1, seq2, num_labels)
+            assert val_scores.size() == torch.Size((batch, seq2, num_labels))
+        
+        # Advantage - [batch, seq2, num_labels]
+        adv_scores = actions.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
+        adv_scores = adv_scores.permute(0, 2, 1)
+        assert adv_scores.size() == torch.Size((batch, seq2, num_labels))
+        
+        # Q value - [batch, seq2, num_labels]
+        if self.dueling:
+            q_value = val_scores + adv_scores - adv_scores.mean(dim=(2, 1), keepdim=True)
+        else:
+            q_value = adv_scores
+        assert q_value.size() == torch.Size((batch, seq2, num_labels))
+        
+        # 去除padding的action对应的score
+        no_pad = actions_mask.view(-1).nonzero().view(-1)
+        q_value = q_value.reshape(-1, num_labels)[no_pad]
+        return (q_value,)
 
 class GGNNDQN(BaseDQN):
     def __init__(self, args):

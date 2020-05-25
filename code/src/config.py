@@ -9,6 +9,11 @@ def set_com_args(parser) -> None:
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",
     )
     parser.add_argument(
+        "--checkpoint",
+        default=None,
+        type=str
+    )
+    parser.add_argument(
         "--checkpoints",
         default=None,
         nargs='+',
@@ -23,6 +28,11 @@ def set_com_args(parser) -> None:
     parser.add_argument(
         "--dev_true_file",
         default="data/fever/shared_task_dev.jsonl",
+        type=str,
+    )
+    parser.add_argument(
+        "--test_true_file",
+        default="data/fever/shared_task_test.jsonl",
         type=str,
     )
     parser.add_argument(

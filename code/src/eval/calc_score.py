@@ -8,6 +8,30 @@ import json
 from .scorer import fever_score
 
 
+def calc_test_result(predicted_list: List[dict], true_file: str, logger=None) -> List[dict]:
+    predicted_dict = {int(item['id']): item for item in predicted_list}
+    if logger:
+        logger.info('Calculating test result')
+        logger.info(f'Loading true data from {true_file}')
+    result = []
+    with open(true_file, 'r') as fr:
+        for line in tqdm(fr.readlines()):
+            instance = json.loads(line.strip())
+            idx = int(instance['id'])
+            if idx in predicted_dict:
+                label = predicted_dict[idx]['predicted_label']
+                evidence = predicted_dict[idx]['predicted_evidence']
+            else:
+                label = 'NOT ENOUGH INFO'
+                evidence = []
+            result.append({
+                'id': idx,
+                'predicted_label': label,
+                'predicted_evidence': evidence
+            })
+    assert len(result) == 19998
+    return result
+
 def calc_fever_score(predicted_list: List[dict], true_file: str, logger=None) \
         -> Tuple[List[dict], float, float, float, float, float]:
     ids = set(map(lambda item: int(item['id']), predicted_list))

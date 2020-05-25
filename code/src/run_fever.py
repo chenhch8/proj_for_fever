@@ -27,7 +27,7 @@ from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWit
 from data.structure import *
 from data.dataset import collate_fn, FeverDataset
 from config import set_com_args, set_dqn_args, set_bert_args
-from eval.calc_score import calc_fever_score, truncate_q_values
+from eval.calc_score import calc_fever_score, truncate_q_values, calc_test_result
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 DQN_MODE = {
     'bert': (BertDQN, bert_load_and_process_data),
     'lstm': (LstmDQN, lstm_load_and_process_data),
-    'ggnn': (GGNNDQN, ggnn_load_and_process_data)
+    'ggnn': (GGNNDQN, ggnn_load_and_process_data),
     'transformer': (TransformerDQN, transformer_load_and_process_data)
 }
 #Agent = LstmDQN
@@ -292,6 +292,17 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
         }, fw)
     
     if not is_eval:
+        predicted_list = calc_test_result(results, args.test_true_file, logger=None)
+        with open(os.path.join(save_dir, 'predictions.jsonl'), 'w') as fw:
+            for item in predicted_list:
+                fw.write(json.dumps(item) + '\n')
+        for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
+            truncate_results = truncate_q_values(results_of_q_state_seq, thred)
+            predicted_list = calc_test_result(truncate_results, args.test_true_file, logger=None)
+            with open(os.path.join(save_dir, 'predictions-%.5f.jsonl' % thred), 'w') as fw:
+                for item in predicted_list:
+                    fw.write(json.dumps(item) + '\n')
+        logger.info(f'Testing result is saved in {save_dir}')
         return
     
     thred_results = defaultdict(dict)
