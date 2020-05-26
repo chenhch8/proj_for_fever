@@ -154,18 +154,19 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') 
                     label = evidence_set = None
                 data.append((claim, label, evidence_set, sentences))
                 
-                if count % 10000 == 0:
+                if count % 100 == 0:
                     for item in data:
                         with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
                             pickle.dump(item, fw)
                         num += 1
+                    del data
                     data = []
 
             for item in data:
                 with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
                     pickle.dump(item, fw)
                 num += 1
-                data = []
+            del data
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
 
     dataset = FeverDataset(cached_file, label2id=args.label2id)
