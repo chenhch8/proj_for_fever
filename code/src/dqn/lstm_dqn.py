@@ -77,10 +77,11 @@ def initilize_bert(args):
                                        dtype=torch.long)
         with torch.no_grad():
             INTERVEL = 64
+            index = 1 if args.model_type in {'bert', 'albert'} else 0
             outputs = [model(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
                                        inputs.items()))
-                        )[1] for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
+                        )[index] for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
             outputs = torch.cat(outputs, dim=0)
             assert outputs.size(0) == inputs['input_ids'].size(0)
         return outputs.detach().cpu().numpy().tolist()
@@ -145,8 +146,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') 
                     label = args.label2id[instance['label']]
                     evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                         for title, line_num in evi] \
-                                            for evi in instance['evidence_set']] \
-                                    if not is_eval else instance['evidence_set']
+                                            for evi in instance['evidence_set']]
                 elif mode == 'dev':
                     label = args.label2id[instance['label']]
                     evidence_set = instance['evidence_set']
@@ -381,6 +381,7 @@ class LstmDQN(BaseDQN):
             'bert-base-uncased': 768,
             'bert-base-cased': 768,
             'albert-large-v2': 1024,
+            'xlnet-large-cased': 1024,
             'gear-pretrained': 768
         }
         # q network
