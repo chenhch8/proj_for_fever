@@ -33,7 +33,8 @@ def initilize_bert(args):
         BertTokenizer,
         XLNetConfig,
         XLNetTokenizer,
-        XLNetModel
+        #XLNetModel,
+        XLNetForSequenceClassification
     )
     
     ALL_MODELS = sum(
@@ -49,13 +50,15 @@ def initilize_bert(args):
 
     MODEL_CLASSES = {
         "bert": (BertConfig, BertModel, BertTokenizer),
-        "xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
+        #"xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
+        "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
         "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
     }
     
     args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.model_name_or_path)
+    config.num_labels = args.num_labels
     tokenizer = tokenizer_class.from_pretrained(
         args.model_name_or_path,
         do_lower_case=args.do_lower_case
@@ -66,6 +69,13 @@ def initilize_bert(args):
         config=config,
     )
     model.to(args.device)
+
+    def model_output(**params):
+        if args.model_type in {'bert', 'albert'}:
+            return model(**params)[1]
+        elif args.model_type in {'xlnet'}:
+            output = model.transformer(**params)[0]
+            return model.sequence_summary(output)
     
     def feature_extractor(texts: List[str]) -> List[List[float]]:
         texts = [texts[0]] + [[texts[0], text] for text in texts[1:]]
@@ -77,11 +87,10 @@ def initilize_bert(args):
                                        dtype=torch.long)
         with torch.no_grad():
             INTERVEL = 64
-            index = 1 if args.model_type in {'bert', 'albert'} else 0
-            outputs = [model(
+            outputs = [model_output(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
                                        inputs.items()))
-                        )[index] for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
+                        ) for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
             outputs = torch.cat(outputs, dim=0)
             assert outputs.size(0) == inputs['input_ids'].size(0)
         return outputs.detach().cpu().numpy().tolist()
@@ -154,7 +163,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') 
                     label = evidence_set = None
                 data.append((claim, label, evidence_set, sentences))
                 
-                if count % 100 == 0:
+                if count % 1000 == 0:
                     for item in data:
                         with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
                             pickle.dump(item, fw)
