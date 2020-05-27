@@ -49,13 +49,3 @@ def collate_fn(batch):
         batch_actions.append(actions)
     return batch_state, batch_actions
 
-
-if __name__ == '__main__':
-    from torch.utils.data.dataloader import DataLoader
-
-    dataset = Dataset('/mnt/data/chenhch8/cache_train_albert-large-v2_lstm',
-                      id2label={'NOT ENOUGH INFO': 2})
-    data_loader = DataLoader(dataset, num_workers=1, collate_fn=collate_fn, batch_size=12)
-
-    for batch_state, batch_actions in data_loader:
-        pass 
