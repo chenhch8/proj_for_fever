@@ -4,6 +4,7 @@ import re
 import pdb
 from typing import List, Set
 from tqdm import tqdm
+from collections import Counter
 
 import numpy as np
 import nltk
@@ -44,6 +45,11 @@ def lemmatizer(words: List[str]) -> Set[str]:
 def iou(words1: Set[str], words2: Set[str]) -> float:
     return len(words1 & words2) / max(1, len(words1 | words2))
 
+def calc_two_sentences_iou(sent1: str, sent2: str) -> float:
+    sent1_tokens = lemmatizer(remove_stop_words(word_tokenize(remove_punct(sent1))))
+    sent2_tokens = lemmatizer(remove_stop_words(word_tokenize(remove_punct(sent2))))
+    return iou(sent1_tokens, sent2_tokens)
+
 def main(filename: str):
     dataset = FeverDataset(filename, label2id={'NOT ENOUGH INFO': 2})
     data_loader = DataLoader(dataset, num_workers=0, collate_fn=collate_fn, batch_size=1)
@@ -68,11 +74,11 @@ def main(filename: str):
                 document[title] = {}
             if num not in document[title]:
                 document[title][num] = {}
-            #document[title][num] = lemmatizer(remove_stop_words(word_tokenize(remove_punct(sent.str.lower()))))
             document[title][num] = lemmatizer(remove_stop_words(word_tokenize(remove_punct(sent.str))))
+            #document[title][num] = set(remove_stop_words(word_tokenize(remove_punct(sent.str))))
         
-        #claim_tokens = lemmatizer(remove_stop_words(word_tokenize(remove_punct(claim.lower()))))
         claim_tokens = lemmatizer(remove_stop_words(word_tokenize(remove_punct(claim))))
+        #claim_tokens = set(remove_stop_words(word_tokenize(remove_punct(claim))))
 
         for title in document:
             for num in document[title]:
@@ -81,8 +87,16 @@ def main(filename: str):
                 else:
                     no_relation.append(iou(claim_tokens, document[title][num]))
 
+    has_counter = Counter(has_relation)
+    no_counter = Counter(no_relation)
+    has_sum = sum(has_counter.values())
+    no_sum = sum(no_counter.values())
+    
     has_relation = np.asarray(has_relation)
     no_relation = np.asarray(no_relation)
+
+    print('has-top_10', list(map(lambda x: [x[0], x[1], x[1] / has_sum], has_counter.most_common(n=10))))
+    print('no-top_10', list(map(lambda x: [x[0], x[1], x[1] / no_sum], no_counter.most_common(n=10))))
 
     print(f'has: min={has_relation.min()} max={has_relation.max()} mean={has_relation.mean()} std={has_relation.std()}')
     print(f'no: min={no_relation.min()} max={no_relation.max()} mean={no_relation.mean()} std={no_relation.std()}')
