@@ -296,7 +296,8 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
         with open(os.path.join(save_dir, 'predictions.jsonl'), 'w') as fw:
             for item in predicted_list:
                 fw.write(json.dumps(item) + '\n')
-        for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
+        #for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
+        for thred in np.arange(0, 1.1, 1 / 20):
             truncate_results = truncate_q_values(results_of_q_state_seq, thred)
             predicted_list = calc_test_result(truncate_results, args.test_true_file, logger=None)
             with open(os.path.join(save_dir, 'predictions-%.5f.jsonl' % thred), 'w') as fw:
@@ -310,7 +311,8 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
     thred_results['scores']['origin'] = scores
     thred_results['predicted_list']['origin'] = predicted_list
     
-    for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
+    #for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
+    for thred in np.arange(0, 1.1, 1 / 20):
         truncate_results = truncate_q_values(results_of_q_state_seq, thred)
         truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results,
                                                                     args.dev_true_file,
