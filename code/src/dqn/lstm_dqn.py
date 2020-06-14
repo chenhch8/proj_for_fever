@@ -126,7 +126,7 @@ def initilize_bert(args):
     
     return feature_extractor
 
-def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', fake_evi: bool=False) \
+def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', fake_evi: bool=True) \
         -> DataSet:
     if filename.find('train') != -1:
         mode = 'train'
@@ -136,7 +136,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         mode = 'test'
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_v5+6'.format(
+        'cached_{}_{}_v5+6.1'.format(
             mode,
             list(filter(None, args.model_name_or_path.split('/'))).pop()
         )

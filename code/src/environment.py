@@ -55,20 +55,17 @@ class ChenEnv(BaseEnv):
             cond1 = state.label == action.label
             cond2 = any([action.sentence in evi for evi in state.evidence_set])
 
-        if state.label == 2: # N
-            return 1. if cond1 else -1.
-        else: # T/F
-            #return 1. if cond1 and cond2 else -1
-            if cond1 and cond2:
-                return 1.
-            elif cond1 and not cond2:
-                return 0.
-            elif not cond1 and cond2:
-                return -1.
-            elif not (cond1 or cond2):
-                return -2.
-            else:
-                return ValueError('condition error')
+        #return 1. if cond1 and cond2 else -1
+        if cond1 and cond2:
+            return 1.
+        elif cond1 and not cond2:
+            return 0.
+        elif not cond1 and cond2:
+            return -1.
+        elif not (cond1 or cond2):
+            return -2.
+        else:
+            return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
         state_next = BaseEnv.new_state(state, action)
