@@ -89,7 +89,8 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         mode = 'test'
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}.pk'.format(
+        #'cached_{}_{}-v6.pk'.format(
+        'cached_{}_{}_64.pk'.format(
             mode,
             list(filter(None, args.model_name_or_path.split('/'))).pop()
         )
@@ -97,10 +98,6 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
     
     data = None
     if not os.path.exists(cached_file):
-        feature_extractor = initilize_bert(args)
-
-        os.makedirs(cached_file, exist_ok=True)
-        
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
         skip, count = 0, 0
@@ -153,7 +150,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
 class EncoderLayer(nn.Module):
     def __init__(self, args):
         super(EncoderLayer, self).__init__()
-        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config_class, model_class, _ = MODEL_CLASSES[args.model_type]
         config = config_class.from_pretrained(
             args.model_name_or_path,
             finetuning_task=args.task_name,
@@ -255,7 +252,7 @@ class ScoreLayer(nn.Module):
         num_labels = self.num_labels
 
         ws = self.weight.unsqueeze(0).matmul(right_inputs.unsqueeze(1).transpose(3, 2))
-        assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq))
+        assert ws.size() == torch.Size((batch, num_labels, left_dim, seq))
         
         scores = left_inputs.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
         scores = scores.permute(0, 2, 1)
@@ -265,6 +262,7 @@ class ScoreLayer(nn.Module):
 
 
 class QNetwork(nn.Module):
+    MAX_SIZE = 200 * 256
     def __init__(self, args, dropout=0.1):
         super(QNetwork, self).__init__()
         self.encoder_layer = EncoderLayer(args)
@@ -272,6 +270,7 @@ class QNetwork(nn.Module):
         self.num_hidden_state = 2
         self.dueling = args.dueling
         self.aggregate = args.aggregate
+        self.device = args.device
         hidden_size = self.encoder_layer.hidden_size
 
         self.lstm = nn.LSTM(input_size=hidden_size,
@@ -290,7 +289,7 @@ class QNetwork(nn.Module):
                 hidden_size
             )
         # Value
-        if dueling:
+        if self.dueling:
             self.val_score_layer = nn.Linear(
                 hidden_size * self.num_hidden_state,
                 1
@@ -299,7 +298,7 @@ class QNetwork(nn.Module):
         self.adv_score_layer = ScoreLayer(
             left_dim=hidden_size,
             right_dim=hidden_size * self.num_hidden_state,
-            num_labels=num_labels
+            num_labels=args.num_labels
         )
     
     def calc_state_semantic(self, features, mask, mode):
@@ -330,25 +329,36 @@ class QNetwork(nn.Module):
         state_mask: [batch, seq]
         actions_ids: [batch, seq2]
         actions_mask: [batch, seq2]
-        input_ids: [batch, seq3]
-        attention_mask: [batch, seq3]
-        token_type_ids: [batch, seq3]
+        input_ids: [batch2, seq3]
+        attention_mask: [batch2, seq3]
+        token_type_ids: [batch2, seq3]
 
         return:
             [batch * available_seq2, num_labels]
         '''
-        features = self.encoder_layer(input_ids=input_ids,
-                                      attention_mask=attention_mask,
-                                      token_type_ids=token_type_ids)
+        INTERVEL = self.MAX_SIZE // input_ids.size(1)
+        features = [self.encoder_layer(
+            input_ids=input_ids[i:i+INTERVEL].to(self.device),
+            attention_mask=attention_mask[i:i+INTERVEL].to(self.device),
+            token_type_ids=token_type_ids[i:i+INTERVEL].to(self.device)
+        ) for i in range(0, input_ids.size(0), INTERVEL)]
+        features = torch.cat(features, dim=0)
 
-        batch, seq = states.size()
-        seq2, num_labels = actions.size(1), 3
+        state_ids = state_ids.to(self.device)
+        state_mask = state_mask.to(self.device)
+        actions_ids = actions_ids.to(self.device)
+        actions_mask = actions_mask.to(self.device)
+        
+        batch, seq = state_ids.size()
+        seq2, num_labels = actions_ids.size(1), 3
         hidden_size = features.size(-1)
         
         states = features[state_ids.view(-1)].view(batch, seq, -1) * state_mask.unsqueeze(2)
         actions = features[actions_ids.view(-1)].view(batch, seq2, -1) * actions_mask.unsqueeze(2)
         assert states.size() == torch.Size((batch, seq, hidden_size))
         assert actions.size() == torch.Size((batch, seq2, hidden_size))
+
+        pdb.set_trace()
 
         # [batch, seq, hidden_size * num_hidden_state]
         out, _ = self.lstm(states)
@@ -415,7 +425,7 @@ class LstmDQN(BaseDQN):
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
         self.model_type = args.model_type.lower()
-        _, tokenizer_class = MODEL_CLASSES[self.model_type]
+        _, _, tokenizer_class = MODEL_CLASSES[self.model_type]
         self.tokenizer = tokenizer_class.from_pretrained(
             args.model_name_or_path,
             do_lower_case=args.do_lower_case,
@@ -437,13 +447,13 @@ class LstmDQN(BaseDQN):
 
     def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
         return tuple(self.tokenizer.encode(text_sequence,
-                                           add_special_tokens=False
+                                           add_special_tokens=False,
                                            max_length=max_length))
     
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
         assert len(batch_state) == len(batch_actions)
         batch_state_ids, batch_actions_ids = [], []
-        all_tokens = [], []
+        all_tokens = []
         offset = 0
         for state, actions in zip(batch_state, batch_actions):
             tokens_state = [[state.claim.tokens, ()]] + \
@@ -468,16 +478,15 @@ class LstmDQN(BaseDQN):
                     pad_on_left=bool(self.model_type in ['xlnet']),
                     pad_token=self.tokenizer.convert_tokens_to_ids([self.tokenizer.pad_token])[0],
                     pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
-                    device=self.device
         )
     
     def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
         assert len(states) == len(actions)
         batch_state_ids, batch_actions_ids = [], []
-        tokens_a, tokens_b = [], []
+        all_tokens = []
         offset = 0
         for state, action in zip(states, actions):
-            tokens_state = [[state.claim.tokensi, ()]] + \
+            tokens_state = [[state.claim.tokens, ()]] + \
                            [[state.claim.tokens, sent.tokens] for sent in state.candidate]
             tokens_actions = [[state.claim.tokens, action.sentence.tokens]]
 
@@ -498,13 +507,12 @@ class LstmDQN(BaseDQN):
                     pad_on_left=bool(self.model_type in ['xlnet']),
                     pad_token=self.tokenizer.convert_tokens_to_ids([self.tokenizer.pad_token])[0],
                     pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
-                    device=self.device
         )
 
     def convert_tensor_to_lstm_input(self,
                                      batch_state_ids: List[List[int]],
                                      batch_actions_ids: List[List[int]],
-                                     all_tokens: List[List[int], List[int]],
+                                     all_tokens: Tuple[List[int], List[int]],
                                      pad_on_left=False,
                                      pad_token=0,
                                      pad_token_segment_id=0,
@@ -561,6 +569,7 @@ class LstmDQN(BaseDQN):
                  for cat_type in token_type_ids],
                 dtype=torch.long
             )
+        pdb.set_trace()
         return {
             'state_ids': state_ids_pad.to(device),
             'actions_ids': actions_ids_pad.to(device),

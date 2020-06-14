@@ -184,7 +184,6 @@ class BaseDQN:
                       ) -> Tuple[List[Action], List[float]]:
                       #top_k: int=1) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
-        MAX_SIZE = 200 * 256
 
         if is_eval: net.eval()
         #else: assert top_k == 1
@@ -192,13 +191,7 @@ class BaseDQN:
         q_values = None
         with torch.no_grad():
             batch_inputs = self.convert_to_inputs_for_select_action(batch_state, batch_actions)
-            K, *DIM = list(batch_inputs.values())[0].size()
-            INTERVAL = MAX_SIZE // np.prod(DIM)
-            q_values = [net(
-                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVAL].to(self.device)),
-                                       batch_inputs.items()))
-                        )[0] for i in range(0, K, INTERVAL)]
-            q_values = torch.cat(q_values, dim=0)
+            q_values = net(**batch_inputs)[0]
         
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):

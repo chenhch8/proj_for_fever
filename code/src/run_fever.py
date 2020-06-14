@@ -211,7 +211,7 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
     if dev_data is None:
         _, load_and_process_data = DQN_MODE[args.dqn_mode]
         dev_data = load_and_process_data(args,
-                                         os.path.join(args.data_dir, 'dev.jsonl' if is_eval else 'test.jsonl'),
+                                         os.path.join(args.data_dir, 'dev_v6.jsonl' if is_eval else 'test_v6.jsonl'),
                                          agent.token)
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
     epoch_iterator = tqdm(data_loader,
@@ -334,7 +334,7 @@ def run_dqn(args) -> None:
     agent.to(args.device)
     if args.do_train:
         train_data = load_and_process_data(args,
-                                           os.path.join(args.data_dir, 'train.jsonl'),
+                                           os.path.join(args.data_dir, 'train_v6.jsonl'),
                                            agent.token)
         epochs_trained = 0
         acc_loss_trained_in_current_epoch = 0
@@ -362,11 +362,11 @@ def run_dqn(args) -> None:
         assert args.checkpoints is not None
         if args.do_eval:
             dev_data = load_and_process_data(args,
-                                             os.path.join(args.data_dir, 'dev.jsonl'),
+                                             os.path.join(args.data_dir, 'dev_v6.jsonl'),
                                              agent.token)
         if args.do_test:
             test_data = load_and_process_data(args,
-                                              os.path.join(args.data_dir, 'test.jsonl'),
+                                              os.path.join(args.data_dir, 'test_v6.jsonl'),
                                               agent.token)
         for checkpoint in args.checkpoints:
             agent.load(checkpoint)

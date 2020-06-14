@@ -17,11 +17,13 @@ from torch.optim import SGD, Adam, AdamW
 #from torch.utils.data.distributed import DistributedSampler
 
 from .base_dqn import BaseDQN
-from .lstm_dqn import lstm_load_and_process_data, convert_tensor_to_lstm_inputs
+#from .lstm_dqn import lstm_load_and_process_data, convert_tensor_to_lstm_inputs
+from .lstm_dqn import lstm_load_and_process_data
 from data.structure import *
 
 
 transformer_load_and_process_data = lstm_load_and_process_data
+convert_to_inputs_for_select_action = None # TODO
 
 
 class PositionalEncoding(nn.Module):

@@ -6,7 +6,7 @@ import sqlite3
 from tqdm import tqdm
 import unicodedata
 from collections import defaultdict
-#import pdb
+import pdb
 
 ENCODING = 'utf-8'
 DATABASE = './data/fever/fever.db'
@@ -38,7 +38,7 @@ def load_fake_evi_file(filename: str) -> dict:
             fake_evidence = sorted(instance['predicted_evidence'],
                                    key=lambda x: x[-1],
                                    reverse=True)
-            data[instance['id']] = fake_evidence
+            data[instance['id']] = list(map(lambda x: [x[0], x[1]], fake_evidence))
     return data
 
 def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
@@ -115,11 +115,12 @@ def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
             if len(documents) == 0: continue
             
             # 为 NEI 添加虚假证据
-            if instance['label'] == 'NOT ENOUGH INFO':
+            if mode == 'train' and instance['label'] == 'NOT ENOUGH INFO':
                 evidence_set = []
-                for title, num, _ in instance['evidence_set']:
+                assert len(instance['evidence_set']) == 1
+                for title, num in instance['evidence_set'][0]:
                     if title in documents and int(num) in documents[title]:
-                        evidence_set.append([title, int(num)])
+                        evidence_set.append([[title, int(num)]])
                         break
                 instance['evidence_set'] = evidence_set
             
