@@ -17,87 +17,69 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, Adam, AdamW
 #from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 #from torch.utils.data.distributed import DistributedSampler
+from transformers import (
+    WEIGHTS_NAME,
+    #AdamW,
+    AlbertConfig,
+    AlbertModel,
+    AlbertTokenizer,
+    BertConfig,
+    BertModel,
+    BertTokenizer,
+    #DistilBertConfig,
+    #DistilBertForSequenceClassification,
+    #DistilBertTokenizer,
+    #FlaubertConfig,
+    #FlaubertForSequenceClassification,
+    #FlaubertTokenizer,
+    RobertaConfig,
+    RobertaForSequenceClassification,
+    RobertaTokenizer,
+    #XLMConfig,
+    #XLMForSequenceClassification,
+    #XLMRobertaConfig,
+    #XLMRobertaForSequenceClassification,
+    #XLMRobertaTokenizer,
+    #XLMTokenizer,
+    XLNetConfig,
+    XLNetForSequenceClassification,
+    XLNetTokenizer,
+    get_linear_schedule_with_warmup,
+)
 
 from .base_dqn import BaseDQN
 from data.structure import *
 from data.dataset import FeverDataset
 
+ALL_MODELS = sum(
+    (
+        tuple(conf.pretrained_config_archive_map.keys())
+        for conf in (
+            BertConfig,
+            XLNetConfig,
+            #XLMConfig,
+            RobertaConfig,
+            #DistilBertConfig,
+            AlbertConfig,
+            #XLMRobertaConfig,
+            #FlaubertConfig,
+        )
+    ),
+    (),
+)
 
-def initilize_bert(args):
-    from transformers import (
-        AlbertConfig,
-        AlbertModel,
-        AlbertTokenizer,
-        BertConfig,
-        BertModel,
-        BertTokenizer,
-        XLNetConfig,
-        XLNetTokenizer,
-        #XLNetModel,
-        XLNetForSequenceClassification
-    )
-    
-    ALL_MODELS = sum(
-        (
-            tuple(conf.pretrained_config_archive_map.keys())
-            for conf in (
-                BertConfig,
-                AlbertConfig,
-            )
-        ),
-        (),
-    )
+MODEL_CLASSES = {
+    "bert": (BertConfig, BertModel, BertTokenizer),
+    "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
+    #"xlm": (XLMConfig, XLMModel, XLMTokenizer),
+    "roberta": (RobertaConfig, RobertaModel, RobertaTokenizer),
+    #"distilbert": (DistilBertConfig, DistilBertModel, DistilBertTokenizer),
+    "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
+    #"xlmroberta": (XLMRobertaConfig, XLMRobertaModel, XLMRobertaTokenizer),
+    #"flaubert": (FlaubertConfig, FlaubertModel, FlaubertTokenizer),
+}
 
-    MODEL_CLASSES = {
-        "bert": (BertConfig, BertModel, BertTokenizer),
-        #"xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
-        "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
-        "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
-    }
-    
-    args.model_type = args.model_type.lower()
-    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.model_name_or_path)
-    config.num_labels = args.num_labels
-    tokenizer = tokenizer_class.from_pretrained(
-        args.model_name_or_path,
-        do_lower_case=args.do_lower_case
-    )
-    model = model_class.from_pretrained(
-        args.model_name_or_path,
-        from_tf=bool(".ckpt" in args.model_name_or_path),
-        config=config,
-    )
-    model.to(args.device)
-
-    def model_output(**params):
-        if args.model_type in {'bert', 'albert'}:
-            return model(**params)[1]
-        elif args.model_type in {'xlnet'}:
-            output = model.transformer(**params)[0]
-            return model.sequence_summary(output)
-    
-    def feature_extractor(texts: List[str]) -> List[List[float]]:
-        texts = [texts[0]] + [[texts[0], text] for text in texts[1:]]
-        inputs = tokenizer.batch_encode_plus(texts, max_length=256)
-        # padding
-        max_length = max([len(tokens) for tokens in inputs['input_ids']])
-        for key in inputs:
-            inputs[key] = torch.tensor([val + [0] * (max_length - len(val))for val in inputs[key]],
-                                       dtype=torch.long)
-        with torch.no_grad():
-            INTERVEL = 64
-            outputs = [model_output(
-                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
-                                       inputs.items()))
-                        ) for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
-            outputs = torch.cat(outputs, dim=0)
-            assert outputs.size(0) == inputs['input_ids'].size(0)
-        return outputs.detach().cpu().numpy().tolist()
-    
-    return feature_extractor
-
-def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') \
+def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', fake_evi: bool=False) \
         -> DataSet:
     if filename.find('train') != -1:
         mode = 'train'
@@ -107,7 +89,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') 
         mode = 'test'
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_preprocess'.format(
+        'cached_{}_{}.pk'.format(
             mode,
             list(filter(None, args.model_name_or_path.split('/'))).pop()
         )
@@ -133,29 +115,25 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') 
                     continue
                 count += 1
                 
-                total_texts = [instance['claim']] + total_texts
-                semantic_embedding = feature_extractor(total_texts)
-                
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=semantic_embedding[0])
+                              tokens=token_fn(instance['claim'], max_length=256))
                 sent2id = {}
                 sentences = []
-                text_id = 1
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=semantic_embedding[text_id]))
+                                                  tokens=token_fn(sentence, max_length=256)))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
-                        text_id += 1
-                assert text_id == len(semantic_embedding)
                 
                 if mode == 'train':
                     label = args.label2id[instance['label']]
                     evidence_set = [[sentences[sent2id[(title, int(line_num))]] \
                                         for title, line_num in evi] \
                                             for evi in instance['evidence_set']]
+                    if not fake_evi and instance['label'] == 'NOT ENOUGH INFO':
+                        evidence_set = []
                 elif mode == 'dev':
                     label = args.label2id[instance['label']]
                     evidence_set = instance['evidence_set']
@@ -163,18 +141,8 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function') 
                     label = evidence_set = None
                 data.append((claim, label, evidence_set, sentences))
                 
-                if count % 1000 == 0:
-                    for item in data:
-                        with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
-                            pickle.dump(item, fw)
-                        num += 1
-                    del data
-                    data = []
-
-            for item in data:
-                with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
-                    pickle.dump(item, fw)
-                num += 1
+            with open(cached_file, 'wb') as fw:
+                pickle.dump(data, fw)
             del data
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
 
@@ -206,63 +174,52 @@ def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
     }
 
 
-class QNetwork(nn.Module):
-    def __init__(self,
-                 input_size,
-                 num_labels,
-                 hidden_size=None,
-                 dropout=0.1,
-                 bidirectional=True,
-                 num_layers=3,
-                 dueling=True,
-                 aggregate='attn_mean'):
-        super(QNetwork, self).__init__()
-        if hidden_size is None:
-            hidden_size = input_size
-        self.num_hidden_state = 2 if bidirectional else 1
-        self.dueling = dueling
-        self.aggregate = aggregate
-        self.lstm = nn.LSTM(input_size=input_size,
-                            hidden_size=hidden_size,
-                            dropout=dropout,
-                            num_layers=num_layers,
-                            batch_first=True,
-                            bidirectional=bidirectional,
-                            bias=True)
-        self.tanh = nn.Tanh()
-        if self.aggregate.find('attn') != -1:
-            # attention paramters
-            self.attn_layer = nn.Sequential(
-                nn.Linear(
-                    input_size + hidden_size * self.num_hidden_state,
-                    hidden_size
-                ),
-                nn.ReLU(True),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_size, 1),
-                nn.ReLU(True)
-            )
-        # Value
-        if dueling:
-            self.value_layer = nn.Linear(
-                hidden_size * self.num_hidden_state,
-                1
-            )
-        # Advantage
-        self.weight = Parameter(torch.Tensor(num_labels,
-                                             hidden_size,
-                                             hidden_size * self.num_hidden_state))
-        self.bias = Parameter(torch.Tensor(num_labels))
-        self.init_parameters()
+class EncoderLayer(nn.Module):
+    def __init__(self, args):
+        super(EncoderLayer, self).__init__()
+        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config = config_class.from_pretrained(
+            args.model_name_or_path,
+            finetuning_task=args.task_name,
+            num_labels=args.num_labels
+        )
+        self.encoder = model_class.from_pretrained(
+            args.model_name_or_path,
+            from_tf=bool(".ckpt" in args.model_name_or_path),
+            config=config,
+        )
+        self.bert_type = args.model_type
+        self.hidden_size = config.hidden_size
 
-    def init_parameters(self):
-        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
-        if self.bias is not None:
-            feature_in = self.weight.size(2)
-            bound = 1 / np.sqrt(feature_in)
-            nn.init.uniform_(self.bias, -bound, bound)
+        if self.bert_type.find('xlnet') != -1:
+            del self.encoder.logits_proj
+    
+    def forward(self, input_ids, attention_mask, token_type_ids):
+        batch_size = input_ids.size(0)
+        if self.bert_type.find('xlnet') != -1:
+            outputs = self.encoder.transformers(input_ids=input_ids,
+                                                attention_mask=attention_mask,
+                                                token_type_ids=token_type_ids)
+            output = self.encoder.sequence_summary(outputs[0])
+        else:
+            outputs = self.encoder(input_ids=input_ids,
+                                   attention_mask=attention_mask,
+                                   token_type_ids=token_type_ids)
+            output = outputs[1]
+        assert output.size() == torch.Size((batch_size, self.hidden_size))
+        return output
 
-    def attention_aggregate(self, query, key, value, q_mask, k_mask):
+
+class AttentionLayer(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(AttentionLayer, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(True),
+            nn.Linear(hidden_size, 1),
+        )
+
+    def forward(self, query, key, value, q_mask, k_mask):
         '''
         query: [batch, seq1, hidden_size]
         key: [batch, seq2, hidden_size * num_hidden_state]
@@ -284,9 +241,9 @@ class QNetwork(nn.Module):
         stack = torch.cat([query_e, key_e], dim=-1)
         assert stack.size() == torch.Size((batch, seq1, seq2, hidden_size1 + hidden_size2))
         # [batch, seq1, seq2]
-        A = self.attn_layer(stack) \
+        A = self.mlp(stack) \
                 .squeeze(-1) \
-                .masked_fill(torch.logical_not(mask), float('-inf')) \
+                .masked_fill(mask == 0, float('-inf')) \
                 .exp()
         A_sum = A.sum(dim=-1, keepdim=True).clamp(min=2e-15)
         attn = A.div(A_sum)
@@ -294,6 +251,56 @@ class QNetwork(nn.Module):
         return attn.matmul(value)
 
 
+class QNetwork(nn.Module):
+    def __init__(self,
+                 bidirectional=True,
+                 dueling=True,
+                 dropout=0.1,
+                 num_layers=3,
+                 aggregate='attn_mean'):
+        super(QNetwork, self).__init__()
+        self.encoder_layer = EncoderLayer(args)
+        
+        self.num_hidden_state = 2 if bidirectional else 1
+        self.dueling = dueling
+        self.aggregate = aggregate
+        hidden_size = self.encoder_layer.hidden_size
+
+        self.lstm = nn.LSTM(input_size=hidden_size,
+                            hidden_size=hidden_size,
+                            dropout=dropout,
+                            num_layers=num_layers,
+                            batch_first=True,
+                            bidirectional=bidirectional,
+                            bias=True)
+        self.tanh = nn.Tanh()
+
+        if self.aggregate.find('attn') != -1:
+            # attention paramters
+            self.attn_layer = AttentionLayer(
+                hidden_size + hidden_size * self.num_hidden_state,
+                hidden_size
+            )
+        # Value
+        if dueling:
+            self.value_layer = nn.Linear(
+                hidden_size * self.num_hidden_state,
+                1
+            )
+        # Advantage
+        self.weight = Parameter(torch.Tensor(num_labels,
+                                             hidden_size,
+                                             hidden_size * self.num_hidden_state))
+        self.bias = Parameter(torch.Tensor(num_labels))
+        self.init_parameters()
+
+    def init_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
+        if self.bias is not None:
+            feature_in = self.weight.size(2)
+            bound = 1 / np.sqrt(feature_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+    
     def calc_state_semantic(self, features, mask, mode):
         batch, _, hidden_size = features.size()
         if mode == 'mean':
@@ -308,7 +315,6 @@ class QNetwork(nn.Module):
         else:
             raise ValueError('mode error')
         return state_semantic
-
 
     def forward(self, states, state_mask, actions, actions_mask):
         '''
@@ -386,22 +392,15 @@ class LstmDQN(BaseDQN):
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-        model_type = args.model_name_or_path.lower().split('/')[-1]
-        HIDDEN_SIZE = {
-            'bert-base-uncased': 768,
-            'bert-base-cased': 768,
-            'albert-large-v2': 1024,
-            'xlnet-large-cased': 1024,
-            'gear-pretrained': 768
-        }
+        args.model_type = args.model_type.lower()
+        _, tokenizer_class = MODEL_CLASSES[args.model_type]
+        self.tokenizer = tokenizer_class.from_pretrained(
+            args.model_name_or_path,
+            do_lower_case=args.do_lower_case,
+        )
         # q network
         self.q_net = QNetwork(
-            input_size=HIDDEN_SIZE[model_type],
-            hidden_size=HIDDEN_SIZE[model_type],
-            num_labels=args.num_labels,
-            dueling=args.dueling,
-            aggregate=args.aggregate,
-            num_layers=args.num_layers
+            args
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
@@ -412,11 +411,13 @@ class LstmDQN(BaseDQN):
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
-        #self.optimizer = SGD(self.q_net.parameters(), lr=args.learning_rate, momentum=0.9)
         self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
         #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
-
+    def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
+        return tuple(self.tokenizer.encode(text_sequence,
+                                           add_special_tokens=False,
+                                           max_length=max_length))
 
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
         assert len(batch_state) == len(batch_actions)
