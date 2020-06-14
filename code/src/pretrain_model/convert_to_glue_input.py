@@ -7,7 +7,8 @@ import sqlite3
 import unicodedata
 from collections import defaultdict
 import json
-#import pdb
+import re
+import pdb
 
 ENCODING = 'utf-8'
 DATABASE = './data/fever/fever.db'
@@ -17,7 +18,15 @@ conn = sqlite3.connect(DATABASE)
 cursor = conn.cursor()
 #import sys
 
-import pdb
+def convert_string(string):
+    string = re.sub('-LRB-', '(', string)
+    string = re.sub('-RRB-', ')', string)
+    string = re.sub('-LSB-', '[', string)
+    string = re.sub('-RSB-', ']', string)
+    string = re.sub('-LCB-', '{', string)
+    string = re.sub('-RCB-', '}', string)
+    string = re.sub('_', ' ', string)
+    return string
 
 #csv.field_size_limit(sys.maxsize)
 def normalize(text: str) -> str:
@@ -33,7 +42,7 @@ def process_data(instances):
                                    instance['evidence']))
         else:
             evidence_set = set(map(lambda sent: ((sent[0], sent[1]),), instance['predicted_evidence']))
-        titles = set([sent[0] for evidence in evidence_set for sent in evidence])
+        titles = set([normalize(sent[0]) for evidence in evidence_set for sent in evidence])
         
         documents = defaultdict(dict)
         for title in titles:
@@ -53,7 +62,8 @@ def process_data(instances):
                     if len(arr) <= 1: continue
                     sentence = ' '.join(arr[1:])
                     if sentence == '' or sentence in english_punctuations: continue
-                    documents[title][line_num] = sentence
+                    sentence = convert_string(normalize(sentence))
+                    documents[title][line_num] = convert_string(title) + ' ' + sentence
         documents = dict(documents)
 
         for evidence in evidence_set:
