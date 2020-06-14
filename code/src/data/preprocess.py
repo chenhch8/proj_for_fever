@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding=utf-8
 import json
+import re
 import sqlite3
 from tqdm import tqdm
 import unicodedata
@@ -14,13 +15,36 @@ english_punctuations = {',', '.', ':', ';', '?', '(', ')', '[', ']', '&', '!', '
 conn = sqlite3.connect(DATABASE)
 cursor = conn.cursor()
 
+def convert_string(string):
+    string = re.sub('-LRB-', '(', string)
+    string = re.sub('-RRB-', ')', string)
+    string = re.sub('-LSB-', '[', string)
+    string = re.sub('-RSB-', ']', string)
+    string = re.sub('-LCB-', '{', string)
+    string = re.sub('-RCB-', '}', string)
+    string = re.sub('_', ' ', string)
+    return string
+
 def normalize(text: str) -> str:
     """Resolve different type of unicode encodings."""
     return unicodedata.normalize('NFD', text)
 
-def data_process(in_file: str, out_file: str) -> None:
+def load_fake_evi_file(filename: str) -> dict:
+    data = {}
+    with open(filename, 'r') as fr:
+        for line in fr:
+            instance = json.loads(line.strip())
+            if instance['label'] != 'NOT ENOUGH INFO': continue
+            fake_evidence = sorted(instance['predicted_evidence'],
+                                   key=lambda x: x[-1],
+                                   reverse=True)
+            data[instance['id']] = fake_evidence
+    return data
+
+def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
     if in_file.find('train') != -1:
         mode = 'train'
+        fake_evi = load_fake_evi_file(fake_evi_file)
     elif in_file.find('dev') != -1:
         mode = 'dev'
     else:
@@ -42,6 +66,9 @@ def data_process(in_file: str, out_file: str) -> None:
                         process_evidence.append([sent[2], sent[3]])
                     if len(process_evidence) and process_evidence not in evidence_set:
                         evidence_set.append(process_evidence)
+                if label == 'NOT ENOUGH INFO':
+                    assert len(evidence_set) == 0
+                    evidence_set.append(fake_evi[instance['id']])
             elif mode == 'dev':
                 label = instance['label']
                 evidence_set = instance['evidence']
@@ -82,18 +109,30 @@ def data_process(in_file: str, out_file: str) -> None:
                         if len(arr) <= 1: continue
                         sentence = ' '.join(arr[1:])
                         if sentence == '' or sentence in english_punctuations: continue
-                        documents[title][line_num] = sentence
+                        sentence = convert_string(normalize(sentence))
+                        documents[title][line_num] = convert_string(normalize(title)) + ' ' + sentence
             documents = dict(documents)
             if len(documents) == 0: continue
+            
+            # 为 NEI 添加虚假证据
+            if instance['label'] == 'NOT ENOUGH INFO':
+                evidence_set = []
+                for title, num, _ in instance['evidence_set']:
+                    if title in documents and int(num) in documents[title]:
+                        evidence_set.append([title, int(num)])
+                        break
+                instance['evidence_set'] = evidence_set
+            
             fw.write((json.dumps({
                 'id': instance['id'],
-                'claim': instance['claim'],
+                'claim': convert_string(normalize(instance['claim'])),
                 'label': instance['label'],
                 'evidence_set': instance['evidence_set'],
                 'documents': documents
             }) + '\n').encode(ENCODING))
 
 if __name__ == '__main__':
-    data_process('./data/retrieved/train.wiki7.jsonl', './data/dqn/train.jsonl')
-    data_process('./data/retrieved/dev.wiki7.jsonl', './data/dqn/dev.jsonl')
-    data_process('./data/retrieved/test.wiki7.jsonl', './data/dqn/test.jsonl')
+    data_process('./data/retrieved/train.wiki7.jsonl', './data/dqn/train_v6.jsonl',
+                 fake_evi_file='./data/retrieved/train.ensembles.s10.jsonl')
+    data_process('./data/retrieved/dev.wiki7.jsonl', './data/dqn/dev_v6.jsonl')
+    data_process('./data/retrieved/test.wiki7.jsonl', './data/dqn/test_v6.jsonl')

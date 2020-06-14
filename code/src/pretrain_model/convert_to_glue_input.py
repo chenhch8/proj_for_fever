@@ -77,7 +77,7 @@ def process_data(instances):
             label = instance['label']
             new_instances.append({
                 'id': str(instance['id']),
-                'claim': instance['claim'],
+                'claim': convert_string(normalize(instance['claim'])),
                 'evidence': evi_str,
                 'label': label
             })

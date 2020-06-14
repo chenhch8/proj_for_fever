@@ -33,7 +33,7 @@ from transformers import (
     #FlaubertForSequenceClassification,
     #FlaubertTokenizer,
     RobertaConfig,
-    RobertaForSequenceClassification,
+    RobertaModel,
     RobertaTokenizer,
     #XLMConfig,
     #XLMForSequenceClassification,
@@ -103,7 +103,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
-        skip, count, num = 0, 0, 0
+        skip, count = 0, 0
         with open(filename, 'rb') as fr:
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
@@ -117,14 +117,14 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                 
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=token_fn(instance['claim'], max_length=256))
+                              tokens=token_fn(instance['claim']))
                 sent2id = {}
                 sentences = []
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence, max_length=256)))
+                                                  tokens=token_fn(sentence)))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
                 
                 if mode == 'train':
@@ -148,30 +148,6 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
 
     dataset = FeverDataset(cached_file, label2id=args.label2id)
     return dataset
-
-
-def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
-                                  batch_actions_tensor: List[torch.Tensor],
-                                  device=None) -> dict:
-    device = device if device != None else torch.device('cpu')
-
-    state_len = [state.size(0) for state in batch_state_tensor]
-    actions_len = [action.size(0) for action in batch_actions_tensor]
-    s_max, a_max = max(state_len), max(actions_len)
-
-    state_pad = pad_sequence(batch_state_tensor, batch_first=True)
-    actions_pad = pad_sequence(batch_actions_tensor, batch_first=True)
-
-    state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
-                             dtype=torch.float)
-    actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
-                                dtype=torch.float)
-    return {
-        'states': state_pad.to(device),
-        'actions': actions_pad.to(device),
-        'state_mask': state_mask.to(device),
-        'actions_mask': actions_mask.to(device)
-    }
 
 
 class EncoderLayer(nn.Module):
@@ -250,28 +226,60 @@ class AttentionLayer(nn.Module):
         assert A.size() == torch.Size((batch, seq1, seq2))
         return attn.matmul(value)
 
+class ScoreLayer(nn.Module):
+    def __init__(self, left_dim, right_dim, num_labels):
+        super(ScoreLayer, self).__init__()
+        self.num_labels = num_labels
+        self.weight = Parameter(torch.Tensor(num_labels,
+                                             left_dim,
+                                             right_dim))
+        self.bias = Parameter(torch.Tensor(num_labels))
+        self.init_parameters()
+
+    def init_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
+        if self.bias is not None:
+            feature_in = self.weight.size(2)
+            bound = 1 / np.sqrt(feature_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, left_inputs, right_inputs):
+        '''
+        left_inputs: [batch, seq, left_dim]
+        right_inputs: [batch, seq, right_dim]
+        
+        return: [batch, seq, num_labels]
+        '''
+        batch, seq, left_dim = left_inputs.size()
+        _, _, right_dim = right_inputs.size()
+        num_labels = self.num_labels
+
+        ws = self.weight.unsqueeze(0).matmul(right_inputs.unsqueeze(1).transpose(3, 2))
+        assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq))
+        
+        scores = left_inputs.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
+        scores = scores.permute(0, 2, 1)
+        assert scores.size() == torch.Size((batch, seq, num_labels))
+
+        return scores
+
 
 class QNetwork(nn.Module):
-    def __init__(self,
-                 bidirectional=True,
-                 dueling=True,
-                 dropout=0.1,
-                 num_layers=3,
-                 aggregate='attn_mean'):
+    def __init__(self, args, dropout=0.1):
         super(QNetwork, self).__init__()
         self.encoder_layer = EncoderLayer(args)
         
-        self.num_hidden_state = 2 if bidirectional else 1
-        self.dueling = dueling
-        self.aggregate = aggregate
+        self.num_hidden_state = 2
+        self.dueling = args.dueling
+        self.aggregate = args.aggregate
         hidden_size = self.encoder_layer.hidden_size
 
         self.lstm = nn.LSTM(input_size=hidden_size,
                             hidden_size=hidden_size,
                             dropout=dropout,
-                            num_layers=num_layers,
+                            num_layers=args.num_layers,
                             batch_first=True,
-                            bidirectional=bidirectional,
+                            bidirectional=True,
                             bias=True)
         self.tanh = nn.Tanh()
 
@@ -283,23 +291,16 @@ class QNetwork(nn.Module):
             )
         # Value
         if dueling:
-            self.value_layer = nn.Linear(
+            self.val_score_layer = nn.Linear(
                 hidden_size * self.num_hidden_state,
                 1
             )
         # Advantage
-        self.weight = Parameter(torch.Tensor(num_labels,
-                                             hidden_size,
-                                             hidden_size * self.num_hidden_state))
-        self.bias = Parameter(torch.Tensor(num_labels))
-        self.init_parameters()
-
-    def init_parameters(self):
-        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
-        if self.bias is not None:
-            feature_in = self.weight.size(2)
-            bound = 1 / np.sqrt(feature_in)
-            nn.init.uniform_(self.bias, -bound, bound)
+        self.adv_score_layer = ScoreLayer(
+            left_dim=hidden_size,
+            right_dim=hidden_size * self.num_hidden_state,
+            num_labels=num_labels
+        )
     
     def calc_state_semantic(self, features, mask, mode):
         batch, _, hidden_size = features.size()
@@ -316,18 +317,39 @@ class QNetwork(nn.Module):
             raise ValueError('mode error')
         return state_semantic
 
-    def forward(self, states, state_mask, actions, actions_mask):
+    def forward(self,
+                state_ids,
+                state_mask,
+                actions_ids,
+                actions_mask,
+                input_ids,
+                attention_mask,
+                token_type_ids):
         '''
-        states: [batch, seq, hidden_size]
+        states_ids: [batch, seq]
         state_mask: [batch, seq]
-        actions: [batch, seq2, hidden_size]
+        actions_ids: [batch, seq2]
         actions_mask: [batch, seq2]
+        input_ids: [batch, seq3]
+        attention_mask: [batch, seq3]
+        token_type_ids: [batch, seq3]
 
         return:
             [batch * available_seq2, num_labels]
         '''
-        batch, seq, hidden_size = states.size()
+        features = self.encoder_layer(input_ids=input_ids,
+                                      attention_mask=attention_mask,
+                                      token_type_ids=token_type_ids)
+
+        batch, seq = states.size()
         seq2, num_labels = actions.size(1), 3
+        hidden_size = features.size(-1)
+        
+        states = features[state_ids.view(-1)].view(batch, seq, -1) * state_mask.unsqueeze(2)
+        actions = features[actions_ids.view(-1)].view(batch, seq2, -1) * actions_mask.unsqueeze(2)
+        assert states.size() == torch.Size((batch, seq, hidden_size))
+        assert actions.size() == torch.Size((batch, seq2, hidden_size))
+
         # [batch, seq, hidden_size * num_hidden_state]
         out, _ = self.lstm(states)
         out = self.tanh(out)
@@ -335,12 +357,17 @@ class QNetwork(nn.Module):
         
         if self.aggregate.find('attn') != -1:
             # [batch, seq2, hidden_size * num_hidden_state]
-            states_feat = self.attention_aggregate(actions,
-                                                   out, out,
-                                                   actions_mask,
-                                                   state_mask)
-            state_semantic = self.calc_state_semantic(states_feat, actions_mask,
-                                                      'mean' if self.aggregate.find('mean') != -1 else 'max')
+            states_feat = self.attn_layer(
+                query=actions,
+                key=out,
+                value=out,
+                q_mask=actions_mask,
+                k_mask=state_mask
+            )
+            state_semantic = self.calc_state_semantic(
+                states_feat, actions_mask,
+                'mean' if self.aggregate.find('mean') != -1 else 'max'
+            )
         else:
             if self.aggregate in {'max', 'mean'}:
                 state_semantic = self.calc_state_semantic(out, state_mask, self.aggregate)
@@ -355,21 +382,16 @@ class QNetwork(nn.Module):
         assert state_semantic.size() == torch.Size((batch, 1, self.num_hidden_state * hidden_size))
         assert states_feat.size() == torch.Size((batch, seq2, self.num_hidden_state * hidden_size))
         
-        # [batch, num_labels, hidden_size, seq2]
-        ws = self.weight.unsqueeze(0).matmul(states_feat.unsqueeze(1).transpose(3, 2))
-        assert ws.size() == torch.Size((batch, num_labels, hidden_size, seq2))
-        
         # Value - [batch, seq2, num_labels]
         if self.dueling:
-            val_scores = self.value_layer(state_semantic)
+            val_scores = self.val_score_layer(state_semantic)
             assert val_scores.size() == torch.Size((batch, 1, 1))
 
             val_scores = val_scores.expand(-1, seq2, num_labels)
             assert val_scores.size() == torch.Size((batch, seq2, num_labels))
         
         # Advantage - [batch, seq2, num_labels]
-        adv_scores = actions.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
-        adv_scores = adv_scores.permute(0, 2, 1)
+        adv_scores = self.adv_score_layer(left_inputs=actions, right_inputs=states_feat)
         assert adv_scores.size() == torch.Size((batch, seq2, num_labels))
         
         # Q value - [batch, seq2, num_labels]
@@ -392,20 +414,19 @@ class LstmDQN(BaseDQN):
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-        args.model_type = args.model_type.lower()
-        _, tokenizer_class = MODEL_CLASSES[args.model_type]
+        self.model_type = args.model_type.lower()
+        _, tokenizer_class = MODEL_CLASSES[self.model_type]
         self.tokenizer = tokenizer_class.from_pretrained(
             args.model_name_or_path,
             do_lower_case=args.do_lower_case,
         )
         # q network
-        self.q_net = QNetwork(
-            args
-        )
+        self.q_net = QNetwork(args)
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
         self.q_net.zero_grad()
 
+        self.set_network_untrainable(self.q_net.encoder_layer)
         self.set_network_untrainable(self.t_net)
 
         if args.local_rank == 0:
@@ -416,35 +437,163 @@ class LstmDQN(BaseDQN):
 
     def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
         return tuple(self.tokenizer.encode(text_sequence,
-                                           add_special_tokens=False,
+                                           add_special_tokens=False
                                            max_length=max_length))
-
+    
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
         assert len(batch_state) == len(batch_actions)
-        batch_state_tensor, batch_actions_tensor = [], []
+        batch_state_ids, batch_actions_ids = [], []
+        all_tokens = [], []
+        offset = 0
         for state, actions in zip(batch_state, batch_actions):
-            # tokens here is actually the sentence embedding
-            ## [seq, dim]
-            state_tensor = torch.tensor([state.claim.tokens] + [sent.tokens for sent in state.candidate],
-                                        dtype=torch.float)
-            ## [seq2, dim]
-            actions_tensor = torch.tensor([action.sentence.tokens for action in actions],
-                                          dtype=torch.float)
-            batch_state_tensor.append(state_tensor)
-            batch_actions_tensor.append(actions_tensor)
-        return convert_tensor_to_lstm_inputs(batch_state_tensor, batch_actions_tensor)
-    
+            tokens_state = [[state.claim.tokens, ()]] + \
+                           [[state.claim.tokens, sent.tokens] for sent in state.candidate]
+            tokens_actions = [[state.claim.tokens, action.sentence.tokens] \
+                              for action in actions]
+            
+            state_ids = torch.arange(len(tokens_state), dtype=torch.long) + offset
+            actions_ids = torch.arange(len(tokens_actions), dtype=torch.long) + offset + len(tokens_state) 
 
+            all_tokens.extend(tokens_state)
+            all_tokens.extend(tokens_actions)
+
+            batch_state_ids.append(state_ids)
+            batch_actions_ids.append(actions_ids)
+
+            offset = len(all_tokens)
+        return self.convert_tensor_to_lstm_input(
+                    batch_state_ids,
+                    batch_actions_ids,
+                    all_tokens,
+                    pad_on_left=bool(self.model_type in ['xlnet']),
+                    pad_token=self.tokenizer.convert_tokens_to_ids([self.tokenizer.pad_token])[0],
+                    pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
+                    device=self.device
+        )
+    
     def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
         assert len(states) == len(actions)
-        batch_state_tensor, batch_actions_tensor = [], []
+        batch_state_ids, batch_actions_ids = [], []
+        tokens_a, tokens_b = [], []
+        offset = 0
         for state, action in zip(states, actions):
-            ## [seq, dim]
-            state_tensor = torch.tensor([state.claim.tokens] + [sent.tokens for sent in state.candidate],
-                                        dtype=torch.float)
-            ## [seq2, dim]
-            actions_tensor = torch.tensor([action.sentence.tokens], dtype=torch.float)
-            batch_state_tensor.append(state_tensor)
-            batch_actions_tensor.append(actions_tensor)
-        return convert_tensor_to_lstm_inputs(batch_state_tensor, batch_actions_tensor, self.device)
+            tokens_state = [[state.claim.tokensi, ()]] + \
+                           [[state.claim.tokens, sent.tokens] for sent in state.candidate]
+            tokens_actions = [[state.claim.tokens, action.sentence.tokens]]
+
+            state_ids = torch.arange(len(tokens_state), dtype=torch.long) + offset
+            actions_ids = torch.arange(len(tokens_actions), dtype=torch.long) + offset + len(state_ids)
+
+            all_tokens.extend(tokens_state)
+            all_tokens.extend(tokens_actions)
+
+            batch_state_ids.append(state_ids)
+            batch_actions_ids.append(actions_ids)
+
+            offset = len(all_tokens)
+        return self.convert_tensor_to_lstm_input(
+                    batch_state_ids,
+                    batch_actions_ids,
+                    all_tokens,
+                    pad_on_left=bool(self.model_type in ['xlnet']),
+                    pad_token=self.tokenizer.convert_tokens_to_ids([self.tokenizer.pad_token])[0],
+                    pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
+                    device=self.device
+        )
+
+    def convert_tensor_to_lstm_input(self,
+                                     batch_state_ids: List[List[int]],
+                                     batch_actions_ids: List[List[int]],
+                                     all_tokens: List[List[int], List[int]],
+                                     pad_on_left=False,
+                                     pad_token=0,
+                                     pad_token_segment_id=0,
+                                     device=None) -> dict:
+        device = device if device != None else torch.device('cpu')
+
+        state_len = [len(state_ids) for state_ids in batch_state_ids]
+        actions_len = [len(actions_ids) for actions_ids in batch_actions_ids]
+        s_max, a_max = max(state_len), max(actions_len)
+
+        state_ids_pad = pad_sequence(batch_state_ids, batch_first=True)
+        actions_ids_pad = pad_sequence(batch_actions_ids, batch_first=True)
+
+        state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
+                                 dtype=torch.float)
+        actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
+                                    dtype=torch.float)
+
+        max_length = 0
+        input_ids, attention_mask, token_type_ids = [], [], []
+        for tokens_a, tokens_b in all_tokens:
+            cat_ids, cat_type, mask = self.token_concate(tokens_a, tokens_b)
+            input_ids.append(cat_ids)
+            attention_mask.append(mask)
+            token_type_ids.append(cat_type)
+            max_length = max(max_length, len(cat_ids))
+            assert len(cat_ids) == len(cat_type) and len(cat_type) == len(mask)
+
+        if pad_on_left:
+            input_ids_pad = torch.tensor(
+                [(pad_token,) * (max_length - len(cat_ids)) + cat_ids for cat_ids in input_ids],
+                dtype=torch.long
+            )
+            attention_mask_pad = torch.tensor(
+                [(0,) * (max_length - len(mask)) + mask for mask in attention_mask],
+                dtype=torch.long
+            )
+            token_type_ids_pad = torch.tensor(
+                [(pad_token_segment_id,) * (max_length - len(cat_type)) + cat_type \
+                 for cat_type in token_type_ids],
+                dtype=torch.long
+            )
+        else:
+            input_ids_pad = torch.tensor(
+                [cat_ids + (pad_token,) * (max_length - len(cat_ids)) for cat_ids in input_ids],
+                dtype=torch.long
+            )
+            attention_mask_pad = torch.tensor(
+                [mask + (0,) * (max_length - len(mask)) for mask in attention_mask],
+                dtype=torch.long
+            )
+            token_type_ids_pad = torch.tensor(
+                [cat_type + (pad_token_segment_id,) * (max_length - len(cat_type)) \
+                 for cat_type in token_type_ids],
+                dtype=torch.long
+            )
+        return {
+            'state_ids': state_ids_pad.to(device),
+            'actions_ids': actions_ids_pad.to(device),
+            'state_mask': state_mask.to(device),
+            'actions_mask': actions_mask.to(device),
+            'input_ids': input_ids_pad.to(device),
+            'attention_mask': attention_mask_pad.to(device),
+            'token_type_ids': token_type_ids_pad.to(device)
+        }
+    
+    def token_concate(self, tokens_a: Tuple[int], tokens_b: Tuple[int]=(), max_length: int=256) \
+            -> Tuple[List[int], List[int], List[int]]:
+        if len(tokens_a) + len(tokens_b) > max_length - 3:
+            if len(tokens_a) > max_length // 2:
+                tokens_a = tokens_a[:max_length // 2] if len(tokens_b) else tokens_a[:max_length - 2]
+            tokens_b = tokens_b[:max_length - len(tokens_a) - 3]
+        
+        CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
+        if self.model_type.find('xlnet') != -1:
+            if len(tokens_b) == 0:
+                cat_token_ids = tokens_a + (SEP, CLS)
+                cat_type_ids = (0,) * (len(tokens_a) + 1) + (2,)
+            else:
+                cat_token_ids = tokens_a + (SEP,) + tokens_b + (SEP, CLS)
+                cat_type_ids = (0,) * (len(tokens_a) + 1) + (1,) * (len(tokens_b) + 1) + (2,)
+        else:
+            if len(tokens_b) == 0:
+                cat_token_ids = (CLS,) + tokens_a + (SEP,)
+                cat_type_ids = (0,) * (len(tokens_a) + 2)
+            else:
+                cat_token_ids = (CLS,) + tokens_a + (SEP,) + tokens_b + (SEP,)
+                cat_type_ids = (0,) * (len(tokens_a) + 2) + (1,) * (len(tokens_b) + 1)
+        cat_mask = (1,) * len(cat_token_ids)
+
+        return cat_token_ids, cat_type_ids, cat_mask
 
