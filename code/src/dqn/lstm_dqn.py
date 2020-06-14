@@ -17,52 +17,30 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, Adam, AdamW
 #from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 #from torch.utils.data.distributed import DistributedSampler
+
+from .base_dqn import BaseDQN
+from data.structure import *
+from data.dataset import FeverDataset
+
 from transformers import (
-    WEIGHTS_NAME,
-    #AdamW,
     AlbertConfig,
     AlbertModel,
     AlbertTokenizer,
     BertConfig,
     BertModel,
     BertTokenizer,
-    #DistilBertConfig,
-    #DistilBertForSequenceClassification,
-    #DistilBertTokenizer,
-    #FlaubertConfig,
-    #FlaubertForSequenceClassification,
-    #FlaubertTokenizer,
-    RobertaConfig,
-    RobertaModel,
-    RobertaTokenizer,
-    #XLMConfig,
-    #XLMForSequenceClassification,
-    #XLMRobertaConfig,
-    #XLMRobertaForSequenceClassification,
-    #XLMRobertaTokenizer,
-    #XLMTokenizer,
     XLNetConfig,
-    XLNetForSequenceClassification,
     XLNetTokenizer,
-    get_linear_schedule_with_warmup,
+    #XLNetModel,
+    XLNetForSequenceClassification
 )
-
-from .base_dqn import BaseDQN
-from data.structure import *
-from data.dataset import FeverDataset
 
 ALL_MODELS = sum(
     (
         tuple(conf.pretrained_config_archive_map.keys())
         for conf in (
             BertConfig,
-            XLNetConfig,
-            #XLMConfig,
-            RobertaConfig,
-            #DistilBertConfig,
             AlbertConfig,
-            #XLMRobertaConfig,
-            #FlaubertConfig,
         )
     ),
     (),
@@ -70,14 +48,83 @@ ALL_MODELS = sum(
 
 MODEL_CLASSES = {
     "bert": (BertConfig, BertModel, BertTokenizer),
+    #"xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
     "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
-    #"xlm": (XLMConfig, XLMModel, XLMTokenizer),
-    "roberta": (RobertaConfig, RobertaModel, RobertaTokenizer),
-    #"distilbert": (DistilBertConfig, DistilBertModel, DistilBertTokenizer),
     "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
-    #"xlmroberta": (XLMRobertaConfig, XLMRobertaModel, XLMRobertaTokenizer),
-    #"flaubert": (FlaubertConfig, FlaubertModel, FlaubertTokenizer),
 }
+
+def initilize_bert(args):
+    args.model_type = args.model_type.lower()
+    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+    config = config_class.from_pretrained(args.model_name_or_path)
+    config.num_labels = args.num_labels
+    tokenizer = tokenizer_class.from_pretrained(
+        args.model_name_or_path,
+        do_lower_case=args.do_lower_case
+    )
+    model = model_class.from_pretrained(
+        args.model_name_or_path,
+        from_tf=bool(".ckpt" in args.model_name_or_path),
+        config=config,
+    )
+    model.to(args.device)
+
+    def model_output(**params):
+        if args.model_type in {'bert', 'albert'}:
+            return model(**params)[1]
+        elif args.model_type in {'xlnet'}:
+            output = model.transformer(**params)[0]
+            return model.sequence_summary(output)
+    
+    def feature_extractor(texts: List[str]) -> List[List[float]]:
+        pad_token = tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0]
+        pad_token_segment_id = 4 if args.model_type in ['xlnet'] else 0
+        pad_on_left = bool(args.model_type in ['xlnet'])
+        
+        texts = [texts[0]] + [[texts[0], text] for text in texts[1:]]
+        inputs = tokenizer.batch_encode_plus(texts, max_length=256)
+        # padding
+        max_length = max([len(input_ids) for input_ids in inputs['input_ids']])
+        if pad_on_left:
+            inputs['input_ids'] = torch.tensor(
+                [[pad_token] * (max_length - len(input_ids)) + input_ids for input_ids in inputs['input_ids']],
+                dtype=torch.long
+            )
+            inputs['attention_mask'] = torch.tensor(
+                [[0] * (max_length - len(mask)) + mask for mask in inputs['attention_mask']],
+                dtype=torch.long
+            )
+            inputs['token_type_ids'] = torch.tensor(
+                [[pad_token_segment_id] * (max_length - len(token_type)) + token_type \
+                 for token_type in inputs['token_type_ids']],
+                dtype=torch.long
+            )
+        else:
+            inputs['input_ids'] = torch.tensor(
+                [input_ids + [pad_token] * (max_length - len(input_ids)) for input_ids in inputs['input_ids']],
+                dtype=torch.long
+            )
+            inputs['attention_mask'] = torch.tensor(
+                [mask + [0] * (max_length - len(mask)) for mask in inputs['attention_mask']],
+                dtype=torch.long
+            )
+            inputs['token_type_ids'] = torch.tensor(
+                [token_type + [pad_token_segment_id] * (max_length - len(token_type)) \
+                 for token_type in inputs['token_type_ids']],
+                dtype=torch.long
+            )
+        
+        with torch.no_grad():
+            INTERVEL = 64
+            outputs = [model_output(
+                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
+                                       inputs.items()))
+                        ) for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
+            outputs = torch.cat(outputs, dim=0)
+            assert outputs.size(0) == inputs['input_ids'].size(0)
+        return outputs.detach().cpu().numpy().tolist()
+    
+    return feature_extractor
 
 def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', fake_evi: bool=False) \
         -> DataSet:
@@ -89,8 +136,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         mode = 'test'
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        #'cached_{}_{}-v6.pk'.format(
-        'cached_{}_{}_64.pk'.format(
+        'cached_{}_{}_v5+6'.format(
             mode,
             list(filter(None, args.model_name_or_path.split('/'))).pop()
         )
@@ -98,9 +144,13 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
     
     data = None
     if not os.path.exists(cached_file):
+        feature_extractor = initilize_bert(args)
+
+        os.makedirs(cached_file, exist_ok=True)
+        
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
-        skip, count = 0, 0
+        skip, count, num = 0, 0, 0
         with open(filename, 'rb') as fr:
             for line in tqdm(fr.readlines()):
                 instance = json.loads(line.decode('utf-8').strip())
@@ -112,17 +162,23 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                     continue
                 count += 1
                 
+                total_texts = [instance['claim']] + total_texts
+                semantic_embedding = feature_extractor(total_texts)
+                
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
-                              tokens=token_fn(instance['claim']))
+                              tokens=semantic_embedding[0])
                 sent2id = {}
                 sentences = []
+                text_id = 1
                 for title, text in instance['documents'].items():
                     for line_num, sentence in text.items():
                         sentences.append(Sentence(id=(title, int(line_num)),
                                                   str=sentence,
-                                                  tokens=token_fn(sentence)))
+                                                  tokens=semantic_embedding[text_id]))
                         sent2id[(title, int(line_num))] = len(sentences) - 1
+                        text_id += 1
+                assert text_id == len(semantic_embedding)
                 
                 if mode == 'train':
                     label = args.label2id[instance['label']]
@@ -138,8 +194,18 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                     label = evidence_set = None
                 data.append((claim, label, evidence_set, sentences))
                 
-            with open(cached_file, 'wb') as fw:
-                pickle.dump(data, fw)
+                if count % 1000 == 0:
+                    for item in data:
+                        with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
+                            pickle.dump(item, fw)
+                        num += 1
+                    del data
+                    data = []
+
+            for item in data:
+                with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
+                    pickle.dump(item, fw)
+                num += 1
             del data
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
 
@@ -147,40 +213,28 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
     return dataset
 
 
-class EncoderLayer(nn.Module):
-    def __init__(self, args):
-        super(EncoderLayer, self).__init__()
-        config_class, model_class, _ = MODEL_CLASSES[args.model_type]
-        config = config_class.from_pretrained(
-            args.model_name_or_path,
-            finetuning_task=args.task_name,
-            num_labels=args.num_labels
-        )
-        self.encoder = model_class.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-        )
-        self.bert_type = args.model_type
-        self.hidden_size = config.hidden_size
+def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
+                                  batch_actions_tensor: List[torch.Tensor],
+                                  device=None) -> dict:
+    device = device if device != None else torch.device('cpu')
 
-        if self.bert_type.find('xlnet') != -1:
-            del self.encoder.logits_proj
-    
-    def forward(self, input_ids, attention_mask, token_type_ids):
-        batch_size = input_ids.size(0)
-        if self.bert_type.find('xlnet') != -1:
-            outputs = self.encoder.transformers(input_ids=input_ids,
-                                                attention_mask=attention_mask,
-                                                token_type_ids=token_type_ids)
-            output = self.encoder.sequence_summary(outputs[0])
-        else:
-            outputs = self.encoder(input_ids=input_ids,
-                                   attention_mask=attention_mask,
-                                   token_type_ids=token_type_ids)
-            output = outputs[1]
-        assert output.size() == torch.Size((batch_size, self.hidden_size))
-        return output
+    state_len = [state.size(0) for state in batch_state_tensor]
+    actions_len = [action.size(0) for action in batch_actions_tensor]
+    s_max, a_max = max(state_len), max(actions_len)
+
+    state_pad = pad_sequence(batch_state_tensor, batch_first=True)
+    actions_pad = pad_sequence(batch_actions_tensor, batch_first=True)
+
+    state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
+                             dtype=torch.float)
+    actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
+                                dtype=torch.float)
+    return {
+        'states': state_pad.to(device),
+        'actions': actions_pad.to(device),
+        'state_mask': state_mask.to(device),
+        'actions_mask': actions_mask.to(device)
+    }
 
 
 class AttentionLayer(nn.Module):
@@ -223,6 +277,7 @@ class AttentionLayer(nn.Module):
         assert A.size() == torch.Size((batch, seq1, seq2))
         return attn.matmul(value)
 
+
 class ScoreLayer(nn.Module):
     def __init__(self, left_dim, right_dim, num_labels):
         super(ScoreLayer, self).__init__()
@@ -262,16 +317,12 @@ class ScoreLayer(nn.Module):
 
 
 class QNetwork(nn.Module):
-    MAX_SIZE = 200 * 256
-    def __init__(self, args, dropout=0.1):
+    def __init__(self, args, dropout=0.1, hidden_size=768):
         super(QNetwork, self).__init__()
-        self.encoder_layer = EncoderLayer(args)
         
         self.num_hidden_state = 2
         self.dueling = args.dueling
         self.aggregate = args.aggregate
-        self.device = args.device
-        hidden_size = self.encoder_layer.hidden_size
 
         self.lstm = nn.LSTM(input_size=hidden_size,
                             hidden_size=hidden_size,
@@ -316,50 +367,18 @@ class QNetwork(nn.Module):
             raise ValueError('mode error')
         return state_semantic
 
-    def forward(self,
-                state_ids,
-                state_mask,
-                actions_ids,
-                actions_mask,
-                input_ids,
-                attention_mask,
-                token_type_ids):
+    def forward(self, states, state_mask, actions, actions_mask):
         '''
-        states_ids: [batch, seq]
+        states: [batch, seq, hidden_size]
         state_mask: [batch, seq]
-        actions_ids: [batch, seq2]
+        actions: [batch, seq2, hidden_size]
         actions_mask: [batch, seq2]
-        input_ids: [batch2, seq3]
-        attention_mask: [batch2, seq3]
-        token_type_ids: [batch2, seq3]
 
         return:
             [batch * available_seq2, num_labels]
         '''
-        INTERVEL = self.MAX_SIZE // input_ids.size(1)
-        features = [self.encoder_layer(
-            input_ids=input_ids[i:i+INTERVEL].to(self.device),
-            attention_mask=attention_mask[i:i+INTERVEL].to(self.device),
-            token_type_ids=token_type_ids[i:i+INTERVEL].to(self.device)
-        ) for i in range(0, input_ids.size(0), INTERVEL)]
-        features = torch.cat(features, dim=0)
-
-        state_ids = state_ids.to(self.device)
-        state_mask = state_mask.to(self.device)
-        actions_ids = actions_ids.to(self.device)
-        actions_mask = actions_mask.to(self.device)
-        
-        batch, seq = state_ids.size()
-        seq2, num_labels = actions_ids.size(1), 3
-        hidden_size = features.size(-1)
-        
-        states = features[state_ids.view(-1)].view(batch, seq, -1) * state_mask.unsqueeze(2)
-        actions = features[actions_ids.view(-1)].view(batch, seq2, -1) * actions_mask.unsqueeze(2)
-        assert states.size() == torch.Size((batch, seq, hidden_size))
-        assert actions.size() == torch.Size((batch, seq2, hidden_size))
-
-        pdb.set_trace()
-
+        batch, seq, hidden_size = states.size()
+        seq2, num_labels = actions.size(1), 3
         # [batch, seq, hidden_size * num_hidden_state]
         out, _ = self.lstm(states)
         out = self.tanh(out)
@@ -425,18 +444,22 @@ class LstmDQN(BaseDQN):
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
         self.model_type = args.model_type.lower()
-        _, _, tokenizer_class = MODEL_CLASSES[self.model_type]
+        config_class, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config = config_class.from_pretrained(args.model_name_or_path)
+        
         self.tokenizer = tokenizer_class.from_pretrained(
             args.model_name_or_path,
             do_lower_case=args.do_lower_case,
         )
         # q network
-        self.q_net = QNetwork(args)
+        self.q_net = QNetwork(
+            args,
+            hidden_size=config.hidden_size,
+        )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
         self.q_net.zero_grad()
 
-        self.set_network_untrainable(self.q_net.encoder_layer)
         self.set_network_untrainable(self.t_net)
 
         if args.local_rank == 0:
@@ -452,157 +475,30 @@ class LstmDQN(BaseDQN):
     
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
         assert len(batch_state) == len(batch_actions)
-        batch_state_ids, batch_actions_ids = [], []
-        all_tokens = []
-        offset = 0
+        batch_state_tensor, batch_actions_tensor = [], []
         for state, actions in zip(batch_state, batch_actions):
-            tokens_state = [[state.claim.tokens, ()]] + \
-                           [[state.claim.tokens, sent.tokens] for sent in state.candidate]
-            tokens_actions = [[state.claim.tokens, action.sentence.tokens] \
-                              for action in actions]
-            
-            state_ids = torch.arange(len(tokens_state), dtype=torch.long) + offset
-            actions_ids = torch.arange(len(tokens_actions), dtype=torch.long) + offset + len(tokens_state) 
-
-            all_tokens.extend(tokens_state)
-            all_tokens.extend(tokens_actions)
-
-            batch_state_ids.append(state_ids)
-            batch_actions_ids.append(actions_ids)
-
-            offset = len(all_tokens)
-        return self.convert_tensor_to_lstm_input(
-                    batch_state_ids,
-                    batch_actions_ids,
-                    all_tokens,
-                    pad_on_left=bool(self.model_type in ['xlnet']),
-                    pad_token=self.tokenizer.convert_tokens_to_ids([self.tokenizer.pad_token])[0],
-                    pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
-        )
+            # tokens here is actually the sentence embedding
+            ## [seq, dim]
+            state_tensor = torch.tensor([state.claim.tokens] + [sent.tokens for sent in state.candidate],
+                                        dtype=torch.float)
+            ## [seq2, dim]
+            actions_tensor = torch.tensor([action.sentence.tokens for action in actions],
+                                          dtype=torch.float)
+            batch_state_tensor.append(state_tensor)
+            batch_actions_tensor.append(actions_tensor)
+        return convert_tensor_to_lstm_inputs(batch_state_tensor, batch_actions_tensor)
     
+
     def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
         assert len(states) == len(actions)
-        batch_state_ids, batch_actions_ids = [], []
-        all_tokens = []
-        offset = 0
+        batch_state_tensor, batch_actions_tensor = [], []
         for state, action in zip(states, actions):
-            tokens_state = [[state.claim.tokens, ()]] + \
-                           [[state.claim.tokens, sent.tokens] for sent in state.candidate]
-            tokens_actions = [[state.claim.tokens, action.sentence.tokens]]
-
-            state_ids = torch.arange(len(tokens_state), dtype=torch.long) + offset
-            actions_ids = torch.arange(len(tokens_actions), dtype=torch.long) + offset + len(state_ids)
-
-            all_tokens.extend(tokens_state)
-            all_tokens.extend(tokens_actions)
-
-            batch_state_ids.append(state_ids)
-            batch_actions_ids.append(actions_ids)
-
-            offset = len(all_tokens)
-        return self.convert_tensor_to_lstm_input(
-                    batch_state_ids,
-                    batch_actions_ids,
-                    all_tokens,
-                    pad_on_left=bool(self.model_type in ['xlnet']),
-                    pad_token=self.tokenizer.convert_tokens_to_ids([self.tokenizer.pad_token])[0],
-                    pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
-        )
-
-    def convert_tensor_to_lstm_input(self,
-                                     batch_state_ids: List[List[int]],
-                                     batch_actions_ids: List[List[int]],
-                                     all_tokens: Tuple[List[int], List[int]],
-                                     pad_on_left=False,
-                                     pad_token=0,
-                                     pad_token_segment_id=0,
-                                     device=None) -> dict:
-        device = device if device != None else torch.device('cpu')
-
-        state_len = [len(state_ids) for state_ids in batch_state_ids]
-        actions_len = [len(actions_ids) for actions_ids in batch_actions_ids]
-        s_max, a_max = max(state_len), max(actions_len)
-
-        state_ids_pad = pad_sequence(batch_state_ids, batch_first=True)
-        actions_ids_pad = pad_sequence(batch_actions_ids, batch_first=True)
-
-        state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
-                                 dtype=torch.float)
-        actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
-                                    dtype=torch.float)
-
-        max_length = 0
-        input_ids, attention_mask, token_type_ids = [], [], []
-        for tokens_a, tokens_b in all_tokens:
-            cat_ids, cat_type, mask = self.token_concate(tokens_a, tokens_b)
-            input_ids.append(cat_ids)
-            attention_mask.append(mask)
-            token_type_ids.append(cat_type)
-            max_length = max(max_length, len(cat_ids))
-            assert len(cat_ids) == len(cat_type) and len(cat_type) == len(mask)
-
-        if pad_on_left:
-            input_ids_pad = torch.tensor(
-                [(pad_token,) * (max_length - len(cat_ids)) + cat_ids for cat_ids in input_ids],
-                dtype=torch.long
-            )
-            attention_mask_pad = torch.tensor(
-                [(0,) * (max_length - len(mask)) + mask for mask in attention_mask],
-                dtype=torch.long
-            )
-            token_type_ids_pad = torch.tensor(
-                [(pad_token_segment_id,) * (max_length - len(cat_type)) + cat_type \
-                 for cat_type in token_type_ids],
-                dtype=torch.long
-            )
-        else:
-            input_ids_pad = torch.tensor(
-                [cat_ids + (pad_token,) * (max_length - len(cat_ids)) for cat_ids in input_ids],
-                dtype=torch.long
-            )
-            attention_mask_pad = torch.tensor(
-                [mask + (0,) * (max_length - len(mask)) for mask in attention_mask],
-                dtype=torch.long
-            )
-            token_type_ids_pad = torch.tensor(
-                [cat_type + (pad_token_segment_id,) * (max_length - len(cat_type)) \
-                 for cat_type in token_type_ids],
-                dtype=torch.long
-            )
-        pdb.set_trace()
-        return {
-            'state_ids': state_ids_pad.to(device),
-            'actions_ids': actions_ids_pad.to(device),
-            'state_mask': state_mask.to(device),
-            'actions_mask': actions_mask.to(device),
-            'input_ids': input_ids_pad.to(device),
-            'attention_mask': attention_mask_pad.to(device),
-            'token_type_ids': token_type_ids_pad.to(device)
-        }
-    
-    def token_concate(self, tokens_a: Tuple[int], tokens_b: Tuple[int]=(), max_length: int=256) \
-            -> Tuple[List[int], List[int], List[int]]:
-        if len(tokens_a) + len(tokens_b) > max_length - 3:
-            if len(tokens_a) > max_length // 2:
-                tokens_a = tokens_a[:max_length // 2] if len(tokens_b) else tokens_a[:max_length - 2]
-            tokens_b = tokens_b[:max_length - len(tokens_a) - 3]
-        
-        CLS, SEP = self.tokenizer.cls_token_id, self.tokenizer.sep_token_id
-        if self.model_type.find('xlnet') != -1:
-            if len(tokens_b) == 0:
-                cat_token_ids = tokens_a + (SEP, CLS)
-                cat_type_ids = (0,) * (len(tokens_a) + 1) + (2,)
-            else:
-                cat_token_ids = tokens_a + (SEP,) + tokens_b + (SEP, CLS)
-                cat_type_ids = (0,) * (len(tokens_a) + 1) + (1,) * (len(tokens_b) + 1) + (2,)
-        else:
-            if len(tokens_b) == 0:
-                cat_token_ids = (CLS,) + tokens_a + (SEP,)
-                cat_type_ids = (0,) * (len(tokens_a) + 2)
-            else:
-                cat_token_ids = (CLS,) + tokens_a + (SEP,) + tokens_b + (SEP,)
-                cat_type_ids = (0,) * (len(tokens_a) + 2) + (1,) * (len(tokens_b) + 1)
-        cat_mask = (1,) * len(cat_token_ids)
-
-        return cat_token_ids, cat_type_ids, cat_mask
+            ## [seq, dim]
+            state_tensor = torch.tensor([state.claim.tokens] + [sent.tokens for sent in state.candidate],
+                                        dtype=torch.float)
+            ## [seq2, dim]
+            actions_tensor = torch.tensor([action.sentence.tokens], dtype=torch.float)
+            batch_state_tensor.append(state_tensor)
+            batch_actions_tensor.append(actions_tensor)
+        return convert_tensor_to_lstm_inputs(batch_state_tensor, batch_actions_tensor, self.device)
 
