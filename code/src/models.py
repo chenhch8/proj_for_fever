@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import numpy as np
+import pdb
 
 from transformers import (
     AlbertConfig,
@@ -69,6 +70,7 @@ class AttentionLayer(nn.Module):
         key_e = key.unsqueeze(1).expand(-1, seq1, -1, -1)
         stack = torch.cat([query_e, key_e], dim=-1)
         assert stack.size() == torch.Size((batch, seq1, seq2, hidden_size1 + hidden_size2))
+        
         # [batch, seq1, seq2]
         A = self.mlp(stack) \
                 .squeeze(-1) \
@@ -257,9 +259,9 @@ class AutoBertModel(nn.Module):
         self.classify = nn.Sequential(
             nn.Linear(7 * config.hidden_size, num_labels, bias=True),
             nn.Dropout(0.1),
-            torch.softmax(dim=1)
+            torch.nn.Softmax(dim=1)
         )
-        self.attn_layer = AttentionLayer(config.hidden_size)
+        self.attn_layer = AttentionLayer(2 * config.hidden_size)
     
     def init_parameters(module):
         if isinstance(module, nn.Linear):
@@ -295,7 +297,7 @@ class AutoBertModel(nn.Module):
                                  k_mask=p_mask)
 
         avg_pre = _mask_mean_(premise, p_mask)  # (batch, d)
-        avg_pre_attn = _mask_mean(p_attn, p_mask)
+        avg_pre_attn = _mask_mean_(p_attn, p_mask)
 
         avg_hyp = _mask_mean_(hypothesis, h_mask)  # (batch, d)
         avg_hyp_attn = _mask_mean_(h_attn, h_mask)  # (batch, d)
@@ -312,20 +314,16 @@ class AutoBertModel(nn.Module):
                           #max_pre - max_pre_attn, \
                           avg_pre * avg_pre_attn, \
                           #max_pre * max_pre_attn
-                         ]), \
+                         ], dim=-1), \
                torch.cat([avg_hyp, \
                           #max_hyp, \
                           avg_hyp - avg_hyp_attn, \
                           #max_hyp - max_hyp_attn, \
                           avg_hyp * avg_hyp_attn, \
                           #max_hyp * max_hyp_attn
-                         ])
+                         ], dim=-1)
             
             
-        # (batch, N, 4d)
-        return torch.cat([HP, HP_attn, HP - HP_attn, HP * HP_attn], dim=-1)
-        
-
     def forward(self, input_ids, token_type_ids, attention_mask, labels=None):
         '''
         input_ids: [batch, N]
@@ -338,8 +336,8 @@ class AutoBertModel(nn.Module):
         hidden_states = outputs[0]
         batch, N, d = hidden_states.size()
         
-        p_mask = token_type_ids  # evidence, (batch, N)
-        h_mask = (1 - p_mask) * attention_mask  # claim, (batch, N)
+        p_mask = token_type_ids.float()  # evidence, (batch, N)
+        h_mask = (1 - p_mask) * attention_mask.float()  # claim, (batch, N)
         if self.model_type.find('xlnet') != -1:
             p_mask[:, -1] = 0  # 去除 [CLS]
             cls = self.fc(hidden_states[:, -1])
@@ -351,7 +349,7 @@ class AutoBertModel(nn.Module):
         # Premise->evidence sentence
         # Hypothesis->claim
         premise = hidden_states * p_mask.unsqueeze(2)  # evidence, (batch, N, d)
-        hypothesis = hidden_state * h_mask.unsqueeze(2) # claim, (batch, N, d)
+        hypothesis = hidden_states * h_mask.unsqueeze(2) # claim, (batch, N, d)
 
         pre_aware_hypo, hyp_aware_pre = self.coarse_fine_grain_layer(premise=premise,
                                                                      hypothesis=hypothesis,
@@ -365,7 +363,7 @@ class AutoBertModel(nn.Module):
         scores_clc = self.classify(coarse_fine_features)
         outputs = (scores_clc, coarse_fine_features)
 
-        if label != None:
+        if labels is not None:
             loss_fn = nn.CrossEntropyLoss()
             loss = loss_fn(scores_clc, labels.view(-1))
             outputs = (loss,) + outputs

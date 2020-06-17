@@ -644,7 +644,7 @@ def main():
     model = AutoBertModel(
         args.model_name_or_path,
         args.model_type,
-        args.num_labels
+        num_labels
     )
 
     if args.local_rank == 0:

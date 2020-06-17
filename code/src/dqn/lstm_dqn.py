@@ -42,7 +42,7 @@ def initilize_bert(args):
         pad_on_left = bool(args.model_type in ['xlnet'])
         
         texts = [texts[0]] + [[texts[0], text] for text in texts[1:]]
-        inputs = tokenizer.batch_encode_plus(texts, max_length=256)
+        inputs = tokenizer.batch_encode_plus(texts, max_length=128)
         # padding
         max_length = max([len(input_ids) for input_ids in inputs['input_ids']])
         if pad_on_left:
