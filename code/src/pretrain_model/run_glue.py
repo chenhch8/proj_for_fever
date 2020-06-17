@@ -79,6 +79,8 @@ try:
 except ImportError:
     from tensorboardX import SummaryWriter
 
+from models import AutoBertModel
+
 logger = logging.getLogger(__name__)
 
 ALL_MODELS = sum(
@@ -163,18 +165,10 @@ def train(args, train_dataset, train_labels, model, tokenizer):
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     
-    #encoder = getattr(model, args.model_type)
-    #classifier = getattr(model, 'classifier')
-    #optimizer = SGD([
-    #    {'params': encoder.parameters()},
-    #    {'params': classifier.parameters(), 'lr': args.learning_rate * 10}
-    #], lr=args.learning_rate, momentum=0.9)
-
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
     
-
     # Check if saved optimizer or scheduler states exist
     if os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt")) and os.path.isfile(
                 os.path.join(args.model_name_or_path, "scheduler.pt")):
@@ -243,7 +237,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
                       'attention_mask': batch[1],
                       'labels':         batch[3]}
             if args.model_type != 'distilbert':
-                inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
+                inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet', 'albert'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
             
@@ -641,11 +635,17 @@ def main():
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     args.model_type = args.model_type.lower()
-    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
-    config.num_layers_of_classifier = args.num_layers_of_classifier
+    #config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+    _, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+    #config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
+    #config.num_layers_of_classifier = args.num_layers_of_classifier
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
-    model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
+    #model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
+    model = AutoBertModel(
+        args.model_name_or_path,
+        args.model_type,
+        args.num_labels
+    )
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
