@@ -256,13 +256,18 @@ class AutoBertModel(nn.Module):
             from_tf=bool(".ckpt" in model_name_or_path),
             config=config,
         )
-        self.fc = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
+        self.fc_1 = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
+        self.fc_2 = nn.Sequential(
+            nn.Linear(4 * config.hidden_size, config.hidden_size, bias=True),
+            nn.ReLU(True)
+        )
         self.classify = nn.Sequential(
-            nn.Linear(7 * config.hidden_size, num_labels, bias=True),
+            nn.Linear(5 * config.hidden_size, num_labels, bias=True),
             nn.Dropout(0.1),
             torch.nn.Softmax(dim=1)
         )
-        self.attn_layer = AttentionLayer(2 * config.hidden_size)
+        self.attn_1 = AttentionLayer(2 * config.hidden_size)
+        self.attn_2 = AttentionLayer(2 * config.hidden_size)
     
     def init_parameters(module):
         if isinstance(module, nn.Linear):
@@ -283,51 +288,42 @@ class AutoBertModel(nn.Module):
         premise/hypothesis: [batch, N, d]
         p_mask/h_mask: [batch, N]
         '''
-        def _mask_mean_(features, mask):
-            return features.sum(dim=1).div(mask.sum(dim=1).clamp(min=1).view(-1, 1))
-        #def _mask_max_(features, mask):
-        #    return features.masked_fill(mask.unsqueeze(2) == 0, float('-inf')).max(dim=1)[0]
+        #def _mask_mean_(features, mask):
+        #    return features.sum(dim=1).div(mask.sum(dim=1).clamp(min=1).view(-1, 1))
+        def _mask_max_(features, mask):
+            return features.masked_fill(mask.unsqueeze(2) == 0, float('-inf')).max(dim=1)[0]
         
-        batch, N, d = premise.size()
         # (batch, N, d)
-        p_attn = self.attn_layer(query=premise,
-                                 key=hypothesis,
-                                 value=hypothesis,
-                                 q_mask=p_mask,
-                                 k_mask=h_mask)
-        h_attn = self.attn_layer(query=hypothesis,
-                                 key=premise,
-                                 value=premise,
-                                 q_mask=h_mask,
-                                 k_mask=p_mask)
+        pre_attn = self.attn_1(query=premise,
+                               key=hypothesis,
+                               value=hypothesis,
+                               q_mask=p_mask,
+                               k_mask=h_mask)
+        hyp_attn = self.attn_1(query=hypothesis,
+                               key=premise,
+                               value=premise,
+                               q_mask=h_mask,
+                               k_mask=p_mask)
+        # (batch, N, d)
+        pre_aware = self.fc_2(torch.cat([premise, pre_attn, premise - pre_attn, premise * pre_attn], dim=-1))
+        hyp_aware = self.fc_2(torch.cat([hypothesis, hyp_attn, hypothesis - hyp_attn, hypothesis * hyp_attn], dim=-1))
+        # (batch, N, d)
+        pre_aware = self.attn_2(query=pre_aware,
+                                key=pre_aware,
+                                value=pre_aware,
+                                q_mask=p_mask,
+                                k_mask=p_mask)
+        hyp_aware = self.attn_2(query=hyp_aware,
+                                key=hyp_aware,
+                                value=hyp_aware,
+                                q_mask=h_mask,
+                                k_mask=h_mask)
+        # (batch, d)
+        pre_out = _mask_max_(pre_aware, p_mask) # (batch, d)
+        hyp_out = _mask_max_(hyp_aware, h_mask)
 
-        avg_pre = _mask_mean_(premise, p_mask)  # (batch, d)
-        avg_pre_attn = _mask_mean_(p_attn, p_mask)
+        return torch.cat([pre_out, hyp_out, torch.abs(pre_out - hyp_out), pre_out * hyp_out], dim=-1)
 
-        avg_hyp = _mask_mean_(hypothesis, h_mask)  # (batch, d)
-        avg_hyp_attn = _mask_mean_(h_attn, h_mask)  # (batch, d)
-
-        #max_pre = _mask_max_(premise, p_mask)
-        #max_pre_attn = _mask_max_(p_attn, p_mask)
-        #
-        #max_hyp = _mask_max_(hypothesis, h_mask)
-        #max_hyp_attn = _mask_max_(h_attn, h_mask)
-
-        return torch.cat([avg_pre, \
-                          #max_pre, \
-                          avg_pre - avg_pre_attn, \
-                          #max_pre - max_pre_attn, \
-                          avg_pre * avg_pre_attn, \
-                          #max_pre * max_pre_attn
-                         ], dim=-1), \
-               torch.cat([avg_hyp, \
-                          #max_hyp, \
-                          avg_hyp - avg_hyp_attn, \
-                          #max_hyp - max_hyp_attn, \
-                          avg_hyp * avg_hyp_attn, \
-                          #max_hyp * max_hyp_attn
-                         ], dim=-1)
-            
             
     def forward(self, input_ids, token_type_ids, attention_mask, labels=None):
         '''
@@ -344,26 +340,26 @@ class AutoBertModel(nn.Module):
         p_mask = token_type_ids.float()  # evidence, (batch, N)
         h_mask = (1 - p_mask) * attention_mask.float()  # claim, (batch, N)
         if self.model_type.find('xlnet') != -1:
-            p_mask[:, -1] = 0  # 去除 [CLS]
-            cls = self.fc(hidden_states[:, -1])
+            p_mask[:, -1] = 0  # 去除 [coarse_features]
+            coarse_features = self.fc_1(hidden_states[:, -1])
         else:
-            h_mask[:, 0] = 0  # 去除 [CLS]
-            cls = self.fc(hidden_states[:, 0])
-        assert cls.size() == torch.Size((batch, d))
+            h_mask[:, 0] = 0  # 去除 [coarse_features]
+            coarse_features = self.fc_1(hidden_states[:, 0])
+        assert coarse_features.size() == torch.Size((batch, d))
 
         # Premise->evidence sentence
         # Hypothesis->claim
         premise = hidden_states * p_mask.unsqueeze(2)  # evidence, (batch, N, d)
         hypothesis = hidden_states * h_mask.unsqueeze(2) # claim, (batch, N, d)
 
-        pre_aware_hypo, hyp_aware_pre = self.coarse_fine_grain_layer(premise=premise,
-                                                                     hypothesis=hypothesis,
-                                                                     p_mask=p_mask,
-                                                                     h_mask=h_mask)
-        assert pre_aware_hypo.size() == hyp_aware_pre.size() and pre_aware_hypo.size() == torch.Size((batch, 3 * d))
+        fine_grain_feaures = self.coarse_fine_grain_layer(premise=premise,
+                                                          hypothesis=hypothesis,
+                                                          p_mask=p_mask,
+                                                          h_mask=h_mask)
+        assert fine_grain_feaures.size() == torch.Size((batch, 4 * d))
 
-        # (batch, 7d)
-        coarse_fine_features = torch.cat([cls, pre_aware_hypo, hyp_aware_pre], dim=1)
+        # (batch, 5d)
+        coarse_fine_features = torch.cat([coarse_features, fine_grain_feaures], dim=1)
 
         scores_clc = self.classify(coarse_fine_features)
         outputs = (scores_clc, coarse_fine_features)
