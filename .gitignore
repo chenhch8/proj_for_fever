@@ -5,3 +5,4 @@ code/*output*/*
 code/.*
 code/show_loss.py
 code/src/pretrain_model/net.py
+code/src/pretrain_model/models.py
