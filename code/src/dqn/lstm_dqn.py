@@ -96,7 +96,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         mode = 'test'
     cached_file = os.path.join(
         '/'.join(filename.split('/')[:-1]),
-        'cached_{}_{}_v5+6'.format(
+        'cached_{}_{}_v5+6.2'.format(
             mode,
             list(filter(None, args.model_name_or_path.split('/'))).pop()
         )
