@@ -277,7 +277,7 @@ def train(args, train_dataset, train_labels, model, tokenizer):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             tr_loss += loss.item()
-            if (step + 1) % args.gradient_accumulation_steps == 0 and not args.tpu:
+            if (step + 1) % args.gradient_accumulation_steps == 0 and not args.tpu or step == len(epoch_iterator) - 1:
                 optimizer.step()
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
