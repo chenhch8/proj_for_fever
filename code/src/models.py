@@ -3,6 +3,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.parameter import Parameter
 import numpy as np
 import os
 import pdb
@@ -242,13 +243,14 @@ class QNetwork(nn.Module):
 
 
 class AutoBertModel(nn.Module):
-    def __init__(self, model_name_or_path, model_type, num_labels=3):
+    def __init__(self, model_name_or_path, model_type, num_labels=3, config=None):
         super(AutoBertModel, self).__init__()
 
         self.model_type = model_type
 
         config_class, model_class, _ = MODEL_CLASSES[model_type]
-        config = config_class.from_pretrained(model_name_or_path)
+        if config is None:
+            config = config_class.from_pretrained(model_name_or_path)
         config.num_labels = num_labels
         
         self.encoder = model_class.from_pretrained(
@@ -277,7 +279,9 @@ class AutoBertModel(nn.Module):
             nn.init.uniform_(module.bias.data, -bound, bound)
 
     def from_pretrained(self, path):
-        self.load(path)
+        print(f'loading checkpoint from {path}')
+        state_dict = torch.load(os.path.join(path, 'pytorch_model.bin'))
+        self.load_state_dict(state_dict)
 
     def save_pretrained(self, path):
         state_dict = self.state_dict()
@@ -321,7 +325,7 @@ class AutoBertModel(nn.Module):
         # (batch, d)
         pre_out = _mask_max_(pre_aware, p_mask) # (batch, d)
         hyp_out = _mask_max_(hyp_aware, h_mask)
-
+        
         return torch.cat([pre_out, hyp_out, torch.abs(pre_out - hyp_out), pre_out * hyp_out], dim=-1)
 
             

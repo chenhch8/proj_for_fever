@@ -679,7 +679,12 @@ def main():
         torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
 
         # Load a trained model and vocabulary that you have fine-tuned
-        model = model_class.from_pretrained(args.output_dir)
+        model = AutoBertModel(
+            args.model_name_or_path,
+            args.model_type,
+            num_labels
+        )
+        model.from_pretrained(args.output_dir)
         tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
         model.to(args.device)
 

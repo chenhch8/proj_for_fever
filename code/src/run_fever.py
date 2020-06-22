@@ -331,11 +331,13 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
 def run_dqn(args) -> None:
     Agent, load_and_process_data = DQN_MODE[args.dqn_mode]
     agent = Agent(args)
-    agent.to(args.device)
     if args.do_train:
         train_data = load_and_process_data(args,
                                            os.path.join(args.data_dir, 'train_v6.jsonl'),
                                            agent.token)
+        
+        agent.to(args.device)
+        
         epochs_trained = 0
         acc_loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0
@@ -368,6 +370,9 @@ def run_dqn(args) -> None:
             test_data = load_and_process_data(args,
                                               os.path.join(args.data_dir, 'test_v6.jsonl'),
                                               agent.token)
+        
+        agent.to(args.device)
+        
         for checkpoint in args.checkpoints:
             agent.load(checkpoint)
             if args.do_eval:

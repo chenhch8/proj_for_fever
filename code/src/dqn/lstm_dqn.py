@@ -16,6 +16,45 @@ from torch.nn.parameter import Parameter
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim import Adam, AdamW
 
+from transformers import (
+    AlbertConfig,
+    AlbertForSequenceClassification,
+    AlbertTokenizer,
+    BertConfig,
+    BertForSequenceClassification,
+    BertTokenizer,
+    #DistilBertConfig,
+    #DistilBertForSequenceClassification,
+    #DistilBertTokenizer,
+    #FlaubertConfig,
+    #FlaubertForSequenceClassification,
+    #FlaubertTokenizer,
+    RobertaConfig,
+    RobertaForSequenceClassification,
+    RobertaTokenizer,
+    #XLMConfig,
+    #XLMForSequenceClassification,
+    #XLMRobertaConfig,
+    #XLMRobertaForSequenceClassification,
+    #XLMRobertaTokenizer,
+    #XLMTokenizer,
+    XLNetConfig,
+    XLNetForSequenceClassification,
+    XLNetTokenizer,
+    #get_linear_schedule_with_warmup,
+)
+
+MODEL_CLASSES = {
+    "bert": (BertConfig, BertForSequenceClassification, BertTokenizer),
+    "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
+    #"xlm": (XLMConfig, XLMForSequenceClassification, XLMTokenizer),
+    "roberta": (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
+    #"distilbert": (DistilBertConfig, DistilBertForSequenceClassification, DistilBertTokenizer),
+    "albert": (AlbertConfig, AlbertForSequenceClassification, AlbertTokenizer),
+    #"xlmroberta": (XLMRobertaConfig, XLMRobertaForSequenceClassification, XLMRobertaTokenizer),
+    #"flaubert": (FlaubertConfig, FlaubertForSequenceClassification, FlaubertTokenizer),
+}
+
 from .base_dqn import BaseDQN
 from data.structure import *
 from data.dataset import FeverDataset
@@ -24,7 +63,8 @@ from models import QNetwork, AutoBertModel
 
 def initilize_bert(args):
     args.model_type = args.model_type.lower()
-    _, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+    config = config_class.from_pretrained(args.model_name_or_path)
     tokenizer = tokenizer_class.from_pretrained(
         args.model_name_or_path,
         do_lower_case=args.do_lower_case
@@ -32,8 +72,10 @@ def initilize_bert(args):
     model = AutoBertModel(
         args.model_name_or_path,
         args.model_type,
-        args.num_labels
+        args.num_labels,
+        config=config
     )
+    model.from_pretrained(args.model_name_or_path)
     model.to(args.device)
 
     def feature_extractor(texts: List[str]) -> List[List[float]]:
@@ -75,12 +117,15 @@ def initilize_bert(args):
             )
         
         with torch.no_grad():
-            INTERVEL = 64
+            INTERVEL = 32
             outputs = [model(
                             **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
                                        inputs.items()))
                         )[1] for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
             outputs = torch.cat(outputs, dim=0)
+            outputs[0, config.hidden_size:] = 0  # 去除 claim 的 fine-grain
+            #if torch.isinf(outputs).sum() or torch.isnan(outputs).sum():
+            #    pdb.set_trace()
             assert outputs.size(0) == inputs['input_ids'].size(0)
         return outputs.detach().cpu().numpy().tolist()
     
@@ -124,7 +169,7 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                 
                 total_texts = [instance['claim']] + total_texts
                 semantic_embedding = feature_extractor(total_texts)
-                
+
                 claim = Claim(id=instance['id'],
                               str=instance['claim'],
                               tokens=semantic_embedding[0])
@@ -205,17 +250,18 @@ class LstmDQN(BaseDQN):
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
         self.model_type = args.model_type.lower()
-        config_class, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+        #config_class, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config_class, _, _ = MODEL_CLASSES[args.model_type]
         config = config_class.from_pretrained(args.model_name_or_path)
         
-        self.tokenizer = tokenizer_class.from_pretrained(
-            args.model_name_or_path,
-            do_lower_case=args.do_lower_case,
-        )
+        #self.tokenizer = tokenizer_class.from_pretrained(
+        #    args.model_name_or_path,
+        #    do_lower_case=args.do_lower_case,
+        #)
         # q network
         self.q_net = QNetwork(
             args,
-            hidden_size=config.hidden_size,
+            hidden_size=5 * config.hidden_size,
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
@@ -229,10 +275,10 @@ class LstmDQN(BaseDQN):
         self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
         #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
-    def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
-        return tuple(self.tokenizer.encode(text_sequence,
-                                           add_special_tokens=False,
-                                           max_length=max_length))
+    #def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
+    #    return tuple(self.tokenizer.encode(text_sequence,
+    #                                       add_special_tokens=False,
+    #                                       max_length=max_length))
     
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
         assert len(batch_state) == len(batch_actions)
