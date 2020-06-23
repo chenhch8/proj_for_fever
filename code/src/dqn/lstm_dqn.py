@@ -132,6 +132,8 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
         mode = 'train'
     elif filename.find('dev') != -1:
         mode = 'dev'
+        if args.do_fever2:
+            mode = f'fever2_{mode}'
     else:
         mode = 'test'
     cached_file = os.path.join(
@@ -141,12 +143,15 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
             list(filter(None, args.model_name_or_path.split('/'))).pop()
         )
     )
+    if args.do_fever2:
+        cached_file += '.pk'
     
     data = None
     if not os.path.exists(cached_file):
         feature_extractor = initilize_bert(args)
 
-        os.makedirs(cached_file, exist_ok=True)
+        if not args.do_fever2:
+            os.makedirs(cached_file, exist_ok=True)
         
         args.logger.info(f'Loading and processing data from {filename}')
         data = []
@@ -187,14 +192,14 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                                             for evi in instance['evidence_set']]
                     if not fake_evi and instance['label'] == 'NOT ENOUGH INFO':
                         evidence_set = []
-                elif mode == 'dev':
+                elif mode.find('dev') != -1:
                     label = args.label2id[instance['label']]
                     evidence_set = instance['evidence_set']
                 else:
                     label = evidence_set = None
                 data.append((claim, label, evidence_set, sentences))
                 
-                if count % 1000 == 0:
+                if count % 1000 == 0 and not args.do_fever2:
                     for item in data:
                         with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
                             pickle.dump(item, fw)
@@ -202,11 +207,16 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
                     del data
                     data = []
 
-            for item in data:
-                with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
-                    pickle.dump(item, fw)
-                num += 1
-            del data
+            if not args.do_fever2:
+                for item in data:
+                    with open(os.path.join(cached_file, f'{num}.pk'), 'wb') as fw:
+                        pickle.dump(item, fw)
+                    num += 1
+                del data
+            else:
+                with open(cached_file, 'wb') as fw:
+                    pickle.dump(data, fw)
+                del data
         args.logger.info(f'Process Done. Skip: {skip}({skip / count})')
 
     dataset = FeverDataset(cached_file, label2id=args.label2id)

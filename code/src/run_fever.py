@@ -27,7 +27,7 @@ from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWit
 from data.structure import *
 from data.dataset import collate_fn, FeverDataset
 from config import set_com_args, set_dqn_args, set_bert_args
-from eval.calc_score import calc_fever_score, truncate_q_values, calc_test_result
+from eval.calc_score import calc_fever_score, truncate_q_values, calc_test_result, calc_fever2_score
 
 logger = logging.getLogger(__name__)
 
@@ -210,8 +210,14 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
     agent.eval()
     if dev_data is None:
         _, load_and_process_data = DQN_MODE[args.dqn_mode]
+        if args.do_eval:
+            filename = 'dev_v6.jsonl'
+        elif args.do_test:
+            filename = 'test_v6.jsonl'
+        elif args.do_fever2:
+            filename = 'fever2-dev_v6.jsonl'
         dev_data = load_and_process_data(args,
-                                         os.path.join(args.data_dir, 'dev_v6.jsonl' if is_eval else 'test_v6.jsonl'),
+                                         os.path.join(args.data_dir, filename),
                                          agent.token)
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
     epoch_iterator = tqdm(data_loader,
@@ -285,12 +291,15 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
     name = 'decision_seq_result.json'
     if not is_eval:
         name = f'test-{name}'
+    if args.do_fever2:
+        name = f'fever2-{name}'
     with open(os.path.join(save_dir, name), 'w') as fw:
         json.dump({
             'results_of_q_state_seq': results_of_q_state_seq,
             'results_of_last_step': results
         }, fw)
-    
+
+   
     if not is_eval:
         predicted_list = calc_test_result(results, args.test_true_file, logger=None)
         with open(os.path.join(save_dir, 'predictions.jsonl'), 'w') as fw:
@@ -306,26 +315,45 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
         logger.info(f'Testing result is saved in {save_dir}')
         return
     
-    thred_results = defaultdict(dict)
-    predicted_list, scores = calc_fever_score(results, args.dev_true_file, logger=None)
-    thred_results['scores']['origin'] = scores
-    thred_results['predicted_list']['origin'] = predicted_list
-    
-    #for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
-    for thred in np.arange(0, 1.1, 1 / 20):
-        truncate_results = truncate_q_values(results_of_q_state_seq, thred)
-        truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results,
-                                                                    args.dev_true_file,
-                                                                    logger=None)
-        thred_results['scores'][f'{thred}'] = truncate_scores
-        thred_results['predicted_list'][f'{thred}'] = truncate_predicted_list
-    thred_results = dict(thred_results)
-    
-    with open(os.path.join(save_dir, 'predicted_result.json'), 'w') as fw:
-        json.dump(thred_results, fw)
-    logger.info(f'Results are saved in {os.path.join(save_dir, "predicted_result.json")}')
+    if args.do_eval:
+        thred_results = defaultdict(dict)
+        predicted_list, scores = calc_fever_score(results, args.dev_true_file, logger=None)
+        thred_results['scores']['origin'] = scores
+        thred_results['predicted_list']['origin'] = predicted_list
+        
+        #for thred in np.arange(0, args.pred_thred + args.pred_thred / 20, args.pred_thred / 20):
+        for thred in np.arange(0, 1.1, 1 / 20):
+            truncate_results = truncate_q_values(results_of_q_state_seq, thred)
+            truncate_predicted_list, truncate_scores = calc_fever_score(truncate_results,
+                                                                        args.dev_true_file,
+                                                                        logger=None)
+            thred_results['scores'][f'{thred}'] = truncate_scores
+            thred_results['predicted_list'][f'{thred}'] = truncate_predicted_list
+        thred_results = dict(thred_results)
+        
+        filename = 'predicted_result.json'
+        with open(os.path.join(save_dir, filename), 'w') as fw:
+            json.dump(thred_results, fw)
+        logger.info(f'Results are saved in {os.path.join(save_dir, filename)}')
+        
+        return thred_results['scores']
 
-    return thred_results['scores']
+    if args.do_fever2:
+        with open(os.path.join(save_dir, 'decision_seq_result.json'), 'r') as fr:
+            predicted_fever1_list = json.load(fr)['results_of_last_step']
+        predicted_fever2_list, predicted_fever1_list, scores = \
+                calc_fever2_score(results,
+                                  predicted_fever1_list,
+                                  os.path.join(args.data_dir, 'fever2-dev_v6.jsonl'))
+        print(scores)
+        with open(os.path.join(save_dir, 'fever2-scores.json'), 'w') as fr:
+            json.dump({
+                'fever2_list': predicted_fever2_list,
+                'fever1_list': predicted_fever1_list,
+                'scores': scores
+            }, fr)
+        return scores
+
 
 
 def run_dqn(args) -> None:
@@ -358,7 +386,7 @@ def run_dqn(args) -> None:
               steps_trained_in_current_epoch,
               losses_trained_in_current_epoch)
         
-    if args.do_eval or args.do_test:
+    if args.do_eval or args.do_test or args.do_fever2:
         assert args.checkpoints is not None
         if args.do_eval:
             dev_data = load_and_process_data(args,
@@ -368,12 +396,18 @@ def run_dqn(args) -> None:
             test_data = load_and_process_data(args,
                                               os.path.join(args.data_dir, 'test_v6.jsonl'),
                                               agent.token)
+        if args.do_fever2:
+            fever2_data = load_and_process_data(args,
+                                                os.path.join(args.data_dir, 'fever2-dev_v6.jsonl'),
+                                                agent.token)
         for checkpoint in args.checkpoints:
             agent.load(checkpoint)
             if args.do_eval:
                 evaluate(args, agent, checkpoint, dev_data, is_eval=True)
             if args.do_test:
                 evaluate(args, agent, checkpoint, test_data, is_eval=False)
+            if args.do_fever2:
+                evaluate(args, agent, checkpoint, fever2_data, is_eval=True)
 
 
 def main() -> None:

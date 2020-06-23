@@ -69,6 +69,34 @@ def calc_fever_score(predicted_list: List[dict], true_file: str, logger=None) \
     return predicted_list, scores
 
 
+def calc_fever2_score(predicted_fever2_list: List[dict], predicted_fever1_list: List[dict], true_file: str) \
+        -> Tuple[List[dict], float, float, float, float, float]:
+    ids_fever2 = set(map(lambda item: int(item['id']), predicted_fever2_list))
+    predicted_fever1_dict = {item['id']: item for item in predicted_fever1_list}
+    true_data = {}
+    with open(true_file, 'r') as fr:
+        for line in tqdm(fr.readlines()):
+            instance = json.loads(line.strip())
+            true_data[instance['id']] = instance
+    cut_predicted_fever1_list = []
+    for idx, instance in true_data.items():
+        if idx not in ids_fever2:
+            predicted_fever2_list.append({
+                'id': instance['id'],
+                'label': instance['label'],
+                'evidence': instance['evidence'],
+                'predicted_label': 'NOT ENOUGH INFO',
+            })
+        cut_predicted_fever1_list.append(predicted_fever1_dict[instance['original_id']])
+    assert len(cut_predicted_fever1_list) == len(predicted_fever2_list)
+
+    scores = {}
+    strict_score, label_accuracy, precision, recall, f1 = fever_score(cut_predicted_fever1_list)
+    scores['fever1'] = (strict_score, label_accuracy, precision, recall, f1)
+    strict_score, label_accuracy, precision, recall, f1 = fever_score(predicted_fever2_list)
+    scores['fever2'] = (strict_score, label_accuracy, precision, recall, f1)
+    return predicted_fever2_list, cut_predicted_fever1_list, scores
+
 def truncate_q_values(predicted_state_seq: List, thred: float=0.1, is_test: bool=False):
     predicted_list = []
     for idx, state_seq in predicted_state_seq:
