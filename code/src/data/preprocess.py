@@ -41,7 +41,9 @@ def load_fake_evi_file(filename: str) -> dict:
             data[instance['id']] = list(map(lambda x: [x[0], x[1]], fake_evidence))
     return data
 
-def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
+def data_process(in_file: str, out_file: str,
+                 fake_evi_file: str=None, is_fever2: bool=False,
+                 fever2_helper_file: str=None) -> None:
     if in_file.find('train') != -1:
         mode = 'train'
         fake_evi = load_fake_evi_file(fake_evi_file)
@@ -49,12 +51,26 @@ def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
         mode = 'dev'
     else:
         mode = 'test'
+
+    if is_fever2:
+        fever2 = {}
+        with open(fever2_helper_file, 'r') as fr:
+            for line in fr:
+                inst = json.loads(line.strip())
+                fever2[inst['id']] = inst
+
     print(f'Loading {in_file}')
     instances = []
     with open(in_file, 'rb') as fr:
         for line in tqdm(fr.readlines()):
             instance = json.loads(line.decode(ENCODING).strip('\r\n'))
             
+            if is_fever2:
+                if 'original_id' not in instance:
+                    continue
+                else:
+                    instance['predicted_pages'] = fever2[instance['original_id']]['predicted_pages']
+
             if mode == 'train':
                 label = instance['label']
                 evidence_set = []
@@ -68,7 +84,8 @@ def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
                         evidence_set.append(process_evidence)
                 if label == 'NOT ENOUGH INFO':
                     assert len(evidence_set) == 0
-                    evidence_set.append(fake_evi[instance['id']])
+                    key = 'id' if not is_fever2 else 'original_id'
+                    evidence_set.append(fake_evi[instance[key]])
             elif mode == 'dev':
                 label = instance['label']
                 evidence_set = instance['evidence']
@@ -76,13 +93,17 @@ def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
                 label = None
                 evidence_set = None
 
-            instances.append({
+            item = {
                 'id': instance['id'],
                 'label': label,
                 'claim': instance['claim'],
                 'evidence_set': evidence_set,
                 'predicted_pages': instance['predicted_pages']
-             })
+            }
+            if is_fever2:
+                item['original_id'] = instance['original_id']
+                item['transformation'] = instance['transformation']
+            instances.append(item)
 
     print(f'Processing and writing to {out_file}')
     with open(out_file, 'wb') as fw:
@@ -124,16 +145,26 @@ def data_process(in_file: str, out_file: str, fake_evi_file: str=None) -> None:
                         break
                 instance['evidence_set'] = evidence_set
             
-            fw.write((json.dumps({
+            item = {
                 'id': instance['id'],
                 'claim': convert_string(normalize(instance['claim'])),
                 'label': instance['label'],
                 'evidence_set': instance['evidence_set'],
                 'documents': documents
-            }) + '\n').encode(ENCODING))
+            }
+            if is_fever2:
+                item['original_id'] = instance['original_id']
+                item['transformation'] = instance['transformation']
+
+            fw.write((json.dumps(item) + '\n').encode(ENCODING))
 
 if __name__ == '__main__':
     data_process('./data/retrieved/train.wiki7.jsonl', './data/dqn/train_v6.jsonl',
                  fake_evi_file='./data/retrieved/train.ensembles.s10.jsonl')
     data_process('./data/retrieved/dev.wiki7.jsonl', './data/dqn/dev_v6.jsonl')
     data_process('./data/retrieved/test.wiki7.jsonl', './data/dqn/test_v6.jsonl')
+    data_process('./data/fever/fever2-fixers-dev.jsonl',
+                 './data/dqn/fever2-dev_v6.jsonl',
+                 is_fever2=True,
+                 fever2_helper_file='./data/retrieved/dev.wiki7.jsonl')
+
