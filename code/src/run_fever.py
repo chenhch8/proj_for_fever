@@ -386,7 +386,7 @@ def run_dqn(args) -> None:
               steps_trained_in_current_epoch,
               losses_trained_in_current_epoch)
         
-    if args.do_eval or args.do_test or args.do_fever2:
+    elif args.do_eval or args.do_test or args.do_fever2:
         assert args.checkpoints is not None
         if args.do_eval:
             dev_data = load_and_process_data(args,
