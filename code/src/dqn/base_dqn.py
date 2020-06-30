@@ -80,7 +80,7 @@ class BaseDQN:
             batch_max_action, batch_max_q_value = \
                 self.select_action(batch_state_next,
                                    batch_actions_next,
-                                   is_eval=False,
+                                   is_eval=True,
                                    net=self.q_net if self.dqn_type == 'ddqn' else self.t_net)
             assert len(batch_max_action) == len(batch_state_next)
 
@@ -92,6 +92,7 @@ class BaseDQN:
                 next_state_values[no_final_mask] = \
                     torch.tensor(batch_max_q_value, dtype=torch.float, device=self.device)
             elif self.args.dqn_type == 'ddqn':
+                self.q_net.train()
                 max_labels = torch.tensor([action.label for action in batch_max_action],
                                           dtype=torch.long, device=self.device).view(-1, 1)
                 next_state_values[no_final_mask] = \
@@ -124,6 +125,7 @@ class BaseDQN:
 
         if log:
             pred_labels = scores.argmax(dim=1).view(-1)
+            pabels = torch.tensor([state.label for state in batch.state]).to(pred_labels)
             acc = (labels.view(-1) == pred_labels).sum().float() / labels.size(0)
             info = f'LA: {acc.item()} ('
             for label in range(3):
