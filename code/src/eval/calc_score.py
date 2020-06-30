@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 # coding=utf-8
+import torch
 from typing import List, Tuple
 from tqdm import tqdm
 from collections import defaultdict
 import json
+from itertools import zip_longest, groupby
 
 from .scorer import fever_score
 
@@ -98,24 +100,44 @@ def calc_fever2_score(predicted_fever2_list: List[dict], predicted_fever1_list: 
     return predicted_fever2_list, cut_predicted_fever1_list, scores
 
 def truncate_q_values(predicted_state_seq: List, thred: float=0.1, is_test: bool=False):
+    def grouper(iterable, n):
+        "Collect data into fixed-length chunks or blocks"
+        # grouper('ABCDEF', 3) --> ABC DEF
+        args = [iter(iterable)] * n
+        return zip_longest(*args, fillvalue=None)
+    def all_equal(iterable):
+        "Returns True if all the elements are equal to each other"
+        g = groupby(iterable)
+        return next(g, True) and not next(g, False)
+
     predicted_list = []
-    for idx, state_seq in predicted_state_seq:
-        score_seq = [score for score, _, _, _ in state_seq]
-        score_gap = [score_seq[t] - score_seq[t - 1] for t in range(1, len(score_seq))] # cur - pre
-        ptr = len(score_seq) - 1
-        for t in range(len(score_gap) - 1, -1, -1):
-            if score_gap[t] >= -thred and score_gap[t] <= thred:
-                ptr = t
-            else:
-                break
+    for group_state_seq in grouper(predicted_state_seq, 3):
+        assert all_equal([idx for idx, _ in group_state_seq])
+        # 获取各pred_label对应的截断Q值
+        max_t = []
+        for _, state_seq in group_state_seq:
+            score_seq = [score for score, _, _, _ in state_seq]
+            score_gap = [score_seq[t] - score_seq[t - 1] for t in range(1, len(score_seq))] # cur - pre
+            ptr = len(score_seq) - 1
+            for t in range(len(score_gap) - 1, -1, -1):
+                if score_gap[t] >= -thred and score_gap[t] <= thred:
+                    ptr = t
+                else:
+                    max_t.append(ptr)
+                    break
+        # 取截断Q值最高的那个作为预测pred_label
+        ids = torch.tensor([group_state_seq[i][1][t][0] for i, t in enumerate(max_t)]).argmax().item()
+        state_id = group_state_seq[ids][0]
+        state_seq = group_state_seq[ids][1]
+        ptr = max_t[ids]
         predicted_list.append({
-            'id': idx,
+            'id': state_id,
             'label': state_seq[ptr][1][0],
             'evidence': state_seq[ptr][2],
             'predicted_label': state_seq[ptr][1][1],
             'predicted_evidence': state_seq[ptr][3]
         } if not is_test else {
-            'id': idx,
+            'id': state_id,
             'predicted_label': state_seq[ptr][1][1],
             'predicted_evidence': state_seq[ptr][3]
         })

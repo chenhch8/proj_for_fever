@@ -30,22 +30,24 @@ class FeverDataset(Dataset):
             claim, label, evidence_set, sentences = self.load_data(self.data[index])
         else:
             claim, label, evidence_set, sentences = self.data[index]
-        state = State(claim=claim,
-                      label=label,
-                      evidence_set=evidence_set,
-                      pred_label=self.label2id['NOT ENOUGH INFO'],
-                      candidate=[],
-                      count=0)
-        actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
-        return state, actions
+        states = [State(
+            claim=claim,
+            label=label,
+            evidence_set=evidence_set,
+            pred_label=idx,
+            candidate=[],
+            count=0
+        ) for idx in self.label2id.values()]
+        actions = [[Action(sentence=sent, label='F/T/N') for sent in sentences] for _ in range(len(states))]
+        return states, actions
 
     def __len__(self):
         return len(self.data)
 
 def collate_fn(batch):
     batch_state, batch_actions = [], []
-    for state, actions in batch:
-        batch_state.append(state)
-        batch_actions.append(actions)
+    for states, actions in batch:
+        batch_state.extend(states)
+        batch_actions.extend(actions)
     return batch_state, batch_actions
 

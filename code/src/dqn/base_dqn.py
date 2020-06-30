@@ -80,7 +80,7 @@ class BaseDQN:
             batch_max_action, batch_max_q_value = \
                 self.select_action(batch_state_next,
                                    batch_actions_next,
-                                   is_eval=False,
+                                   is_eval=True,
                                    net=self.q_net if self.dqn_type == 'ddqn' else self.t_net)
             assert len(batch_max_action) == len(batch_state_next)
 
@@ -92,6 +92,7 @@ class BaseDQN:
                 next_state_values[no_final_mask] = \
                     torch.tensor(batch_max_q_value, dtype=torch.float, device=self.device)
             elif self.args.dqn_type == 'ddqn':
+                self.q_net.train()
                 max_labels = torch.tensor([action.label for action in batch_max_action],
                                           dtype=torch.long, device=self.device).view(-1, 1)
                 next_state_values[no_final_mask] = \
@@ -124,6 +125,7 @@ class BaseDQN:
 
         if log:
             pred_labels = scores.argmax(dim=1).view(-1)
+            labels = torch.tensor([state.label for state in batch.state]).to(pred_labels)
             acc = (labels.view(-1) == pred_labels).sum().float() / labels.size(0)
             info = f'LA: {acc.item()} ('
             for label in range(3):
@@ -182,12 +184,10 @@ class BaseDQN:
                       net: nn.Module,
                       is_eval: bool=False,
                       ) -> Tuple[List[Action], List[float]]:
-                      #top_k: int=1) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
         MAX_SIZE = 200 * 256
 
         if is_eval: net.eval()
-        #else: assert top_k == 1
 
         q_values = None
         with torch.no_grad():
@@ -202,40 +202,15 @@ class BaseDQN:
         
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
-            cur_q_values = q_values[offset:offset + len(actions)]
-            #_top_k_ = min(top_k, len(actions))
+            cur_q_values = q_values[offset:offset + len(actions), state.pred_label]
             if self.epsilon_greedy or is_eval:
-                TF = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
-                N = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
-                comp = TF < N
-                if torch.prod(comp):
-                    #indics = cur_q_values.view(-1).topk(k=_top_k_, largest=True)
-                    #max_actions = [(ind // self.args.num_labels, \
-                    #                ind % self.args.num_labels) for ind in indics]
-                    max_action = cur_q_values.argmax().item()
-                    sent_id = max_action // self.args.num_labels
-                    label_id = max_action % self.args.num_labels
-                else:
-                    indics = (~comp).sum(dim=1).nonzero().view(-1)
-                    #map_indics = cur_q_values[indics].view(-1).topk(k=_top_k_, largest=True)
-                    #max_actions = [(indics[ind // self.args.num_labels], \
-                    #                ind % self.args.num_labels) for ind in map_indics]
-                    max_action = cur_q_values[indics].argmax().item()
-                    sent_id = indics[max_action // self.args.num_labels].item()
-                    label_id = max_action % self.args.num_labels
+                sent_id = cur_q_values.argmax().item()
             else:
-                #max_actions = [(random.randint(0, max(0, len(actions) - 1)), \
-                #                random.randint(0, self.args.num_labels - 1)) for _ in range(top_k)]
                 sent_id = random.randint(0, max(0, len(actions) - 1))
-                label_id = random.randint(0, self.args.num_labels - 1)
             
-            if actions[0].sentence is None:
-                assert len(actions) == 1 and cur_q_values.size(0) == 1
-                action = Action(sentence=None, label=label_id)
-            else:
-                action = Action(sentence=actions[sent_id].sentence, label=label_id)
+            action = Action(sentence=actions[sent_id].sentence, label=state.pred_label)
 
-            q = cur_q_values[sent_id, label_id].item()
+            q = cur_q_values[sent_id].item()
             batch_selected_action.append((action, q))
             offset += len(actions)
         assert offset == q_values.size(0)
