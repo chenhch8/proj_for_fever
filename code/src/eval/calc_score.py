@@ -123,8 +123,8 @@ def truncate_q_values(predicted_state_seq: List, thred: float=0.1, is_test: bool
                 if score_gap[t] >= -thred and score_gap[t] <= thred:
                     ptr = t
                 else:
-                    max_t.append(ptr)
                     break
+            max_t.append(ptr)
         # 取截断Q值最高的那个作为预测pred_label
         ids = torch.tensor([group_state_seq[i][1][t][0] for i, t in enumerate(max_t)]).argmax().item()
         state_id = group_state_seq[ids][0]
