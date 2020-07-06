@@ -70,6 +70,24 @@ def train(args,
           acc_loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0,
           losses_trained_in_current_epoch: List[float]=[]) -> None:
+
+    def log_scores(scores, save_dir, title):
+        content = ''
+        for thred in scores:
+            if thred == 'origin': continue
+            content += '*' * 20 + ' %0.5f ' % float(thred) + '*' * 20 + '\n'
+            for label in scores[thred]:
+                #strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
+                content += f'{label}\t{scores[thred][label]}\n'
+        with open(os.path.join(save_dir, 'results.txt'), 'a') as fw:
+            fw.write(content)
+        
+        content = title
+        for label in scores['origin']:
+            content += f'{label}\t{scores["origin"][label]}\n'
+        with open(os.path.join(args.output_dir, 'results.txt'), 'a') as fw:
+            fw.write(content)
+
     logger.info('Training')
     env = Env(args.max_evi_size)
     if args.mem.find('label') == -1:
@@ -170,6 +188,10 @@ def train(args,
                     fw.write('\n'.join(list(map(str, losses))))
                 t_losses.extend(losses)
                 losses = []
+                
+                scores = evaluate(args, agent, save_dir)
+                log_scores(scores, save_dir,
+                           title='*' * 20 + ' %d - %d ' % (epoch + 1, step + 1) + '*' * 20 + f'\nloss={t_loss / t_steps}\n')
 
         epoch_iterator.close()
 
@@ -186,22 +208,8 @@ def train(args,
         
         if args.do_eval:
             scores = evaluate(args, agent, save_dir)
-            
-            content = ''
-            for thred in scores:
-                if thred == 'origin': continue
-                content += '*' * 20 + ' %0.5f ' % float(thred) + '*' * 20 + '\n'
-                for label in scores[thred]:
-                    #strict_score, label_accuracy, precision, recall, f1 = scores[thred][label]
-                    content += f'{label}\t{scores[thred][label]}\n'
-            with open(os.path.join(save_dir, 'results.txt'), 'a') as fw:
-                fw.write(content)
-            
-            content = '*' * 20 + ' %d ' % (epoch + 1) + '*' * 20 + f'\nloss={t_loss / t_steps}\n'
-            for label in scores['origin']:
-                content += f'{label}\t{scores["origin"][label]}\n'
-            with open(os.path.join(args.output_dir, 'results.txt'), 'a') as fw:
-                fw.write(content)
+            log_scores(scores, save_dir,
+                       title='*' * 20 + ' %d ' % (epoch + 1) + '*' * 20 + f'\nloss={t_loss / t_steps}\n')
                 
     train_iterator.close()
 
