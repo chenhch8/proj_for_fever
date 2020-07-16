@@ -125,7 +125,7 @@ class BaseDQN:
 
         if log:
             pred_labels = scores.argmax(dim=1).view(-1)
-            labels = torch.tensor([state.label for state in batch.state]).to(pred_labels)
+            pabels = torch.tensor([state.label for state in batch.state]).to(pred_labels)
             acc = (labels.view(-1) == pred_labels).sum().float() / labels.size(0)
             info = f'LA: {acc.item()} ('
             for label in range(3):
