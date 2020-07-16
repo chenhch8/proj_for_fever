@@ -39,8 +39,9 @@ class BaseEnv:
 
 
 class ChenEnv(BaseEnv):
-    def __init__(self, K=5):
+    def __init__(self, label2id, K=5):
         super(ChenEnv, self).__init__(K)
+        self.label2id = label2id
 
     def reward(self, state: State, action: Action) -> float:
         if self.is_done(state) or action.sentence is None:
@@ -55,7 +56,7 @@ class ChenEnv(BaseEnv):
             cond1 = state.label == action.label
             cond2 = any([action.sentence in evi for evi in state.evidence_set])
 
-        if state.label == 2: # N
+        if state.label == self.label2id['NOT ENOUGH INFO']: # N
             return 1. if cond1 else -1.
         else: # T/F
             #return 1. if cond1 and cond2 else -1

@@ -89,7 +89,7 @@ def train(args,
             fw.write(content)
 
     logger.info('Training')
-    env = Env(args.max_evi_size)
+    env = Env(label2id=args.label2id, K=args.max_evi_size)
     if args.mem.find('label') == -1:
         memory = Memory[args.mem](args.capacity)
     else:
@@ -425,12 +425,20 @@ def main() -> None:
     set_bert_args(parser)
     args = parser.parse_args()
     args.logger = logger
-    args.label2id = {
-        'NOT ENOUGH INFO': 2,
-        'SUPPORTS': 1,
-        'REFUTES': 0
-    }
-    args.id2label = ['REFUTES', 'SUPPORTS', 'NOT ENOUGH INFO']
+    if args.model_type != 'roberta':
+        args.label2id = {
+            'NOT ENOUGH INFO': 2,
+            'SUPPORTS': 1,
+            'REFUTES': 0
+        }
+        args.id2label = ['REFUTES', 'SUPPORTS', 'NOT ENOUGH INFO']
+    else:
+        args.label2id = {
+            'NOT ENOUGH INFO': 1,
+            'SUPPORTS': 2,
+            'REFUTES': 0
+        }
+        args.id2label = ['REFUTES', 'NOT ENOUGH INFO', 'SUPPORTS']
     args.do_lower_case = bool(args.do_lower_case)
     logger.info(vars(args))
 

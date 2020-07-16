@@ -32,7 +32,10 @@ from transformers import (
     XLNetConfig,
     XLNetTokenizer,
     #XLNetModel,
-    XLNetForSequenceClassification
+    XLNetForSequenceClassification,
+    RobertaConfig,
+    RobertaForSequenceClassification,
+    RobertaTokenizer,
 )
 
 ALL_MODELS = sum(
@@ -41,6 +44,7 @@ ALL_MODELS = sum(
         for conf in (
             BertConfig,
             AlbertConfig,
+            RobertaConfig,
         )
     ),
     (),
@@ -51,6 +55,7 @@ MODEL_CLASSES = {
     #"xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
     "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
     "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
+    "roberta": (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
 }
 
 def initilize_bert(args):
@@ -75,6 +80,10 @@ def initilize_bert(args):
         elif args.model_type in {'xlnet'}:
             output = model.transformer(**params)[0]
             return model.sequence_summary(output)
+        elif args.model_type in {'roberta'}:
+            output = model.roberta(**params)[0]
+            output = output[:, 0, :]  # take <s> token (equiv. to [CLS])
+            return output
     
     def feature_extractor(texts: List[str]) -> List[List[float]]:
         pad_token = tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0]
@@ -98,7 +107,7 @@ def initilize_bert(args):
                 [[pad_token_segment_id] * (max_length - len(token_type)) + token_type \
                  for token_type in inputs['token_type_ids']],
                 dtype=torch.long
-            )
+            ) if args.model_type in ['bert', 'xlnet', 'albert'] else None
         else:
             inputs['input_ids'] = torch.tensor(
                 [input_ids + [pad_token] * (max_length - len(input_ids)) for input_ids in inputs['input_ids']],
@@ -112,12 +121,12 @@ def initilize_bert(args):
                 [token_type + [pad_token_segment_id] * (max_length - len(token_type)) \
                  for token_type in inputs['token_type_ids']],
                 dtype=torch.long
-            )
+            ) if args.model_type in ['bert', 'xlnet', 'albert'] else None
         
         with torch.no_grad():
             INTERVEL = 64
             outputs = [model_output(
-                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device)),
+                            **dict(map(lambda x: (x[0], x[1][i:i + INTERVEL].to(args.device) if x[1] is not None else x[1]),
                                        inputs.items()))
                         ) for i in range(0, inputs['input_ids'].size(0), INTERVEL)]
             outputs = torch.cat(outputs, dim=0)
