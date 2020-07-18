@@ -320,7 +320,7 @@ class TransformerDQN(BaseDQN):
         # q network
         self.q_net = QNetwork(
             hidden_size=config.hidden_size,
-            dropout=config.dropout,
+            #dropout=config.dropout,
             num_labels=args.num_labels,
             nheads=args.nhead,
         )
