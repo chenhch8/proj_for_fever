@@ -269,15 +269,17 @@ class QNetwork(nn.Module):
         #if dueling:
         #    self.value_layer = nn.Linear(hidden_size, 1)
         self.nheads = nheads
-        self.transformer = Transformer(dim=hidden_size,
-                                       nheads=nheads,
-                                       dropout=dropout)
-        out_dim = (hidden_size // nheads) * nheads
+        self.transformer_1 = Transformer(dim=hidden_size,
+                                         nheads=nheads,
+                                         dropout=dropout)
+        self.transformer_2 = Transformer(dim=hidden_size,
+                                         nheads=nheads,
+                                         dropout=dropout)
         self.mlp = nn.Sequential(
-            nn.Linear(2 * out_dim, out_dim),
+            nn.Linear(2 * hidden_size, hidden_size),
             nn.ReLU(True),
             nn.Dropout(dropout),
-            nn.Linear(out_dim, num_labels),
+            nn.Linear(hidden_size, num_labels),
         )
 
     def forward(self, claims, evidences, evidences_mask):
@@ -292,14 +294,22 @@ class QNetwork(nn.Module):
         batch, seq, hidden_size = evidences.size()
         num_labels, nheads = 3, self.nheads
         
-        output = self.transformer(
+        evidences = self.transformer_1(
+            query=evidences,
+            key=evidences,
+            value=evidences,
+            q_mask=evidences_mask,
+            k_mask=evidences_mask
+        )
+        assert evidences.size() == torch.Size((batch, seq, hidden_size))
+        output = self.transformer_2(
             query = claims.unsqueeze(1),
             key=evidences,
             value=evidences,
             q_mask=torch.ones([batch, 1], dtype=torch.float).to(evidences_mask),
             k_mask=evidences_mask
         )
-        assert output.size() == torch.Size((batch, 1, (hidden_size // nheads) * nheads))
+        assert output.size() == torch.Size((batch, 1, hidden_size))
         assert claims.size() == torch.Size((batch, hidden_size))
         q_value = self.mlp(torch.cat([claims, output.squeeze(1)], dim=-1))
         assert q_value.size() == torch.Size((batch, 3))
