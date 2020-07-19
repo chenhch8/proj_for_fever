@@ -59,7 +59,6 @@ class ChenEnv(BaseEnv):
             if cond1: return 1
             elif self.is_done(state): return -1
             else: return 0
-            return 1. if cond1 else -1.
         else: # T/F
             #return 1. if cond1 and cond2 else -1
             if cond1 and cond2:
