@@ -184,6 +184,7 @@ class BaseDQN:
                       net: nn.Module,
                       is_eval: bool=False,
                       ) -> Tuple[List[Action], List[float]]:
+                      #top_k: int=1) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
         MAX_SIZE = 512 * 256
 
@@ -202,15 +203,27 @@ class BaseDQN:
         
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
-            cur_q_values = q_values[offset:offset + len(actions), state.pred_label]
+            cur_q_values = q_values[offset:offset + len(actions)]
             if self.epsilon_greedy or is_eval:
-                sent_id = cur_q_values.argmax().item()
+                TF = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
+                N = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
+                comp = TF < N
+                if torch.prod(comp):
+                    max_action = cur_q_values.argmax().item()
+                    sent_id = max_action // self.args.num_labels
+                    label_id = max_action % self.args.num_labels
+                else:
+                    indics = (~comp).sum(dim=1).nonzero().view(-1)
+                    max_action = cur_q_values[indics].argmax().item()
+                    sent_id = indics[max_action // self.args.num_labels].item()
+                    label_id = max_action % self.args.num_labels
             else:
                 sent_id = random.randint(0, max(0, len(actions) - 1))
+                label_id = random.randint(0, self.args.num_labels - 1)
             
-            action = Action(sentence=actions[sent_id].sentence, label=state.pred_label)
+            action = Action(sentence=actions[sent_id].sentence, label=label_id)
 
-            q = cur_q_values[sent_id].item()
+            q = cur_q_values[sent_id, label_id].item()
             batch_selected_action.append((action, q))
             offset += len(actions)
         assert offset == q_values.size(0)
