@@ -4,6 +4,7 @@ from tqdm import tqdm, trange
 from functools import reduce
 from copy import deepcopy
 import pdb
+import os
 import math
 from typing import Tuple, List
 
@@ -18,8 +19,8 @@ from torch.optim import SGD, Adam, AdamW
 #from torch.utils.data.distributed import DistributedSampler
 
 from .base_dqn import BaseDQN
-from .lstm_dqn import lstm_load_and_process_data
 from data.structure import *
+from data.dataset import FeverDataset
 
 from transformers import (
     AlbertConfig,
@@ -462,16 +463,16 @@ class QNetwork(nn.Module):
 
 class LstmDQN(BaseDQN):
     def __init__(self, args):
-        super(TransformerDQN, self).__init__(args)
+        super(LstmDQN, self).__init__(args)
         # Load pretrained model and tokenizer
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-        config_class = CONFIG_CLASSES[args.model_type]
+        config_class, _, _ = MODEL_CLASSES[args.model_type]
         config = config_class.from_pretrained(args.model_name_or_path)
         # q network
         self.q_net = QNetwork(
-            num_layers=args.num_layers
+            num_layers=args.num_layers,
             hidden_size=config.hidden_size,
             num_labels=args.num_labels,
             nheads=args.nhead,
@@ -503,7 +504,7 @@ class LstmDQN(BaseDQN):
                 [torch.tensor(evidence + [action.sentence.tokens],
                               dtype=torch.float) for action in actions],
             )
-        return convert_tensor_to_transformer_inputs(batch_claims, batch_evidences)
+        return convert_tensor_to_lstm_inputs(batch_claims, batch_evidences)
     
 
     def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
@@ -518,5 +519,5 @@ class LstmDQN(BaseDQN):
                 torch.tensor(evidence + [action.sentence.tokens],
                              dtype=torch.float)
             )
-        return convert_tensor_to_transformer_inputs(batch_claims, batch_evidences, self.device)
+        return convert_tensor_to_lstm_inputs(batch_claims, batch_evidences, self.device)
 
