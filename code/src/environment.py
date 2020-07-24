@@ -20,7 +20,8 @@ class BaseEnv:
         return State(claim=state.claim,
                      label=state.label,
                      evidence_set=state.evidence_set,
-                     candidate=state.candidate + [action.sentence],
+                     candidate=state.candidate + [action.sentence] \
+                                if action.sentence is not None else state.candidate,
                      pred_label=action.label,
                      count=state.count + 1)
     
@@ -56,19 +57,19 @@ class ChenEnv(BaseEnv):
             cond2 = any([action.sentence in evi for evi in state.evidence_set])
 
         if state.label == self.label2id['NOT ENOUGH INFO']: # N
-            if cond1: return 1
-            elif self.is_done(state): return -1
-            else: return 0
+            return 1. if cond1 else -1.
         else: # T/F
             #return 1. if cond1 and cond2 else -1
             if cond1 and cond2:
                 return 1.
             elif cond1 and not cond2:
                 return 0.
-            elif self.is_done(state):
+            elif not cond1 and cond2:
                 return -1.
+            elif not (cond1 or cond2):
+                return -2.
             else:
-                return 0.
+                return ValueError('condition error')
 
     def step(self, state: State, action: Action) -> Tuple[State, float, bool]:
         state_next = BaseEnv.new_state(state, action)
