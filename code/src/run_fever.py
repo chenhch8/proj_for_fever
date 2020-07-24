@@ -256,7 +256,7 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
                     
                     if len(actions_next) == 0:
                         #actions_next = [Action(sentence=None, label='F/T/N')]
-                        continue
+                        break
                     else:
                         batch_actions_next.append(actions_next)
                 
@@ -280,20 +280,21 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
                 idx = state_seq[0][i].claim.id
                 results_of_q_state_seq.append([idx, q_state_values])
 
-            # 选择末尾Q值最高的那个
-            ids = torch.tensor(q_value_seq[-1]).argmax().item()
 
-            state = state_seq[-1][ids]
-            results.append({
-                'id': state.claim.id,
-                'label': args.id2label[state.label] if is_eval else None,
-                'evidence': state.evidence_set if is_eval else None,
-                'predicted_label': args.id2label[state.pred_label],
-                'predicted_evidence': \
-                    reduce(lambda seq1, seq2: seq1 + seq2,
-                           map(lambda sent: [list(sent.id)], state.candidate)) \
-                        if len(state.candidate) else []
-            })
+            batch_max_t = [-1] * len(state_seq[0])
+
+            for i, max_t in enumerate(batch_max_t):
+                state = state_seq[max_t][i]
+                results.append({
+                    'id': state.claim.id,
+                    'label': args.id2label[state.label] if is_eval else None,
+                    'evidence': state.evidence_set if is_eval else None,
+                    'predicted_label': args.id2label[state.pred_label],
+                    'predicted_evidence': \
+                        reduce(lambda seq1, seq2: seq1 + seq2,
+                               map(lambda sent: [list(sent.id)], state.candidate)) \
+                            if len(state.candidate) else []
+                })
 
     name = 'decision_seq_result.json'
     if not is_eval:

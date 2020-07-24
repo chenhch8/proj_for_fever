@@ -2,16 +2,16 @@
 # coding=utf-8
 from tqdm import tqdm, trange
 from functools import reduce
-from typing import List, Tuple
 from copy import deepcopy
-import os
-import json
-import pickle
 import pdb
+import os
+import math
+from typing import Tuple, List
 
 import numpy as np
 import torch
 from torch import nn
+#from torch.nn import TransformerEncoderLayer, TransformerEncoder
 from torch.nn.parameter import Parameter
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, Adam, AdamW
@@ -38,6 +38,7 @@ from transformers import (
     RobertaTokenizer,
 )
 
+
 ALL_MODELS = sum(
     (
         tuple(conf.pretrained_config_archive_map.keys())
@@ -50,6 +51,7 @@ ALL_MODELS = sum(
     (),
 )
 
+
 MODEL_CLASSES = {
     "bert": (BertConfig, BertModel, BertTokenizer),
     #"xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
@@ -57,6 +59,7 @@ MODEL_CLASSES = {
     "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
     "roberta": (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
 }
+
 
 def initilize_bert(args):
     args.model_type = args.model_type.lower()
@@ -232,226 +235,229 @@ def lstm_load_and_process_data(args: dict, filename: str, token_fn: 'function', 
     return dataset
 
 
-def convert_tensor_to_lstm_inputs(batch_state_tensor: List[torch.Tensor],
-                                  batch_actions_tensor: List[torch.Tensor],
-                                  device=None) -> dict:
+def convert_tensor_to_lstm_inputs(batch_claims: List[List[float]],
+                                         batch_evidences: List[torch.Tensor],
+                                         device=None) -> dict:
     device = device if device != None else torch.device('cpu')
+    
+    evi_len = [evi.size(0) for evi in batch_evidences]
+    evi_max = max(evi_len)
 
-    state_len = [state.size(0) for state in batch_state_tensor]
-    actions_len = [action.size(0) for action in batch_actions_tensor]
-    s_max, a_max = max(state_len), max(actions_len)
+    claims_tensor = torch.tensor(batch_claims, device=device)
 
-    state_pad = pad_sequence(batch_state_tensor, batch_first=True)
-    actions_pad = pad_sequence(batch_actions_tensor, batch_first=True)
+    evidences_pad = pad_sequence(batch_evidences, batch_first=True).to(device)
 
-    state_mask = torch.tensor([[1] * size + [0] * (s_max - size) for size in state_len],
-                             dtype=torch.float)
-    actions_mask = torch.tensor([[1] * size + [0] * (a_max - size) for size in actions_len],
-                                dtype=torch.float)
+    evidences_mask = torch.tensor(
+        [[1] * size + [0] * (evi_max - size) for size in evi_len],
+        dtype=torch.float,
+        device=device
+    )
+
     return {
-        'states': state_pad.to(device),
-        'actions': actions_pad.to(device),
-        'state_mask': state_mask.to(device),
-        'actions_mask': actions_mask.to(device)
+        'claims': claims_tensor,
+        'evidences': evidences_pad,
+        'evidences_mask': evidences_mask
     }
 
 
-class AttentionLayer(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(AttentionLayer, self).__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(True),
-            nn.Linear(hidden_size, 1),
-        )
+class ScaledDotProductAttention(nn.Module):
+    def __init__(self):
+        super(ScaledDotProductAttention, self).__init__()
 
-    def forward(self, query, key, value, q_mask, k_mask):
+    def forward(self, query, key, value, q_mask, k_mask, scale=None):
         '''
-        query: [batch, seq1, hidden_size]
-        key: [batch, seq2, hidden_size * num_hidden_state]
-        value: [batch, seq2, hidden_size * num_hidden_state]
-        q_mask: [batch, seq1]
-        k_mask: [batch, seq2]
+        q: [B, L_q, D_q]
+        k: [B, L_k, D_k]
+        v: [B, L_v, D_v]
+        q_mask: [B, L_q]
+        k_mask: [B, L_k]
+        '''
+        batch, L_q, D_q = query.size()
+        _, L_k, D_k = key.size()
 
-        return:
-            [batch, seq1, hidden_size]
-        '''
-        batch, seq1, hidden_size1 = query.size()
-        _, seq2, hidden_size2 = key.size()
+        if scale is None:
+            scale = D_q
 
         mask = q_mask.unsqueeze(2).matmul(k_mask.unsqueeze(1))
-        assert mask.size() == torch.Size((batch, seq1, seq2))
-        
-        query_e = query.unsqueeze(2).expand(-1, -1, seq2, -1)
-        key_e = key.unsqueeze(1).expand(-1, seq1, -1, -1)
-        stack = torch.cat([query_e, key_e], dim=-1)
-        assert stack.size() == torch.Size((batch, seq1, seq2, hidden_size1 + hidden_size2))
-        # [batch, seq1, seq2]
-        A = self.mlp(stack) \
-                .squeeze(-1) \
+        assert mask.size() == torch.Size((batch, L_q, L_k))
+
+        # [batch, L_q, L_k]
+        A = query.matmul(key.transpose(1, 2)) \
+                .div(np.sqrt(scale)) \
                 .masked_fill(mask == 0, float('-inf')) \
                 .exp()
         A_sum = A.sum(dim=-1, keepdim=True).clamp(min=2e-15)
         attn = A.div(A_sum)
-        assert A.size() == torch.Size((batch, seq1, seq2))
+        assert attn.size() == torch.Size((batch, L_q, L_k))
         return attn.matmul(value)
 
 
-class ScoreLayer(nn.Module):
-    def __init__(self, left_dim, right_dim, num_labels):
-        super(ScoreLayer, self).__init__()
-        self.num_labels = num_labels
-        self.weight = Parameter(torch.Tensor(num_labels,
-                                             left_dim,
-                                             right_dim))
-        self.bias = Parameter(torch.Tensor(num_labels))
-        self.init_parameters()
+class MultiHeadAttention(nn.Module):
+    def __init__(self, dim, nheads=8, dropout=0.1):
+        super(MultiHeadAttention, self).__init__()
+        self.dim_head = dim // nheads
+        self.nheads = nheads
+        self.linear_k = nn.Linear(dim, self.dim_head * nheads)
+        self.linear_v = nn.Linear(dim, self.dim_head * nheads)
+        self.linear_q = nn.Linear(dim, self.dim_head * nheads)
 
-    def init_parameters(self):
-        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
-        if self.bias is not None:
-            feature_in = self.weight.size(2)
-            bound = 1 / np.sqrt(feature_in)
-            nn.init.uniform_(self.bias, -bound, bound)
+        self.dot_product_attn = ScaledDotProductAttention()
+        self.linear_final = nn.Linear(dim, dim)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, left_inputs, right_inputs):
+        self.layer_norm = nn.LayerNorm(dim)
+
+    def forward(self, query, key, value, q_mask, k_mask):
         '''
-        left_inputs: [batch, seq, left_dim]
-        right_inputs: [batch, seq, right_dim]
-        
-        return: [batch, seq, num_labels]
+        key: [B, L_k, D_k]
+        value: [B, L_v, D_v]
+        query: [B, L_q, D_q]
+        q_mask: [B, L_q]
+        k_mask: [k_q]
         '''
-        batch, seq, left_dim = left_inputs.size()
-        _, _, right_dim = right_inputs.size()
-        num_labels = self.num_labels
+        residual = query
+        batch = key.size(0)
 
-        ws = self.weight.unsqueeze(0).matmul(right_inputs.unsqueeze(1).transpose(3, 2))
-        assert ws.size() == torch.Size((batch, num_labels, left_dim, seq))
+        key = self.linear_k(key)
+        value = self.linear_v(value)
+        query = self.linear_q(query)
+
+        key = key.view(batch * self.nheads, -1, self.dim_head)
+        value = value.view(batch * self.nheads, -1, self.dim_head)
+        query = query.view(batch * self.nheads, -1, self.dim_head)
+
+        q_mask = q_mask.repeat(self.nheads, 1)
+        k_mask = k_mask.repeat(self.nheads, 1)
+
+        context = self.dot_product_attn(query=query,
+                                        key=key,
+                                        value=value,
+                                        q_mask=q_mask,
+                                        k_mask=k_mask,
+                                        scale=self.dim_head)
+        context = context.view(batch, -1, self.nheads * self.dim_head)
         
-        scores = left_inputs.transpose(2, 1).unsqueeze(1).mul(ws).sum(dim=2) + self.bias[None,:,None]
-        scores = scores.permute(0, 2, 1)
-        assert scores.size() == torch.Size((batch, seq, num_labels))
+        output = self.linear_final(context)
+        output = self.dropout(output)
 
-        return scores
+        output = self.layer_norm(residual + output)
+
+        return output
+
+
+class PositionalWiseFeedForward(nn.Module):
+    def __init__(self, dim=512, ffn_dim=2048, dropout=0.1):
+        super(PositionalWiseFeedForward, self).__init__()
+        self.w1 = nn.Conv1d(dim, ffn_dim, 1)
+        self.w2 = nn.Conv1d(dim, ffn_dim, 1)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        '''
+        x: [B, S, D]
+        '''
+        output = x.transpose(1, 2)
+        output = self.w2(torch.relu(self.w1(output)))
+        output = self.dropout(output.transpose(1, 2))
+
+        return self.layer_norm(x + output)
+
+
+class Transformer(nn.Module):
+    def __init__(self, dim, nheads=8, dropout=0.1):
+        super(Transformer, self).__init__()
+        self.nheads = nheads
+        self.attention = MultiHeadAttention(dim=dim, nheads=nheads, dropout=dropout)
+        dim = (dim // nheads) * nheads
+        self.pos_fc = PositionalWiseFeedForward(dim=dim, dropout=dropout, ffn_dim=dim)
+    
+    def forward(self, query, key, value, q_mask, k_mask):
+        '''
+        query: [B, L_q, D_q]
+        key: [B, L_k, D_k]
+        value: [B, L_v, D_v]
+        q_mask: [B, L_q]
+        k_mask: [B, L_k]
+        '''
+        B, L_q, dim = query.size()
+        L_k = key.size(1)
+
+        output = self.attention(
+            query=query,
+            key=key,
+            value=value,
+            q_mask=q_mask,
+            k_mask=k_mask
+        )
+        dim = (dim // self.nheads) * self.nheads
+        assert output.size() == torch.Size((B, L_q, dim))
+        output = self.pos_fc(output)
+        return output
 
 
 class QNetwork(nn.Module):
-    def __init__(self, args, dropout=0.1, hidden_size=768):
+    def __init__(self, num_labels, num_layers=3, nheads=8, dropout=0.1, hidden_size=768):
         super(QNetwork, self).__init__()
         
         self.num_hidden_state = 2
-        self.dueling = args.dueling
-        self.aggregate = args.aggregate
+        self.num_labels = num_labels
 
-        self.lstm = nn.LSTM(input_size=hidden_size,
-                            hidden_size=hidden_size,
-                            dropout=dropout,
-                            num_layers=args.num_layers,
-                            batch_first=True,
-                            bidirectional=True,
-                            bias=True)
-        self.tanh = nn.Tanh()
-
-        if self.aggregate.find('attn') != -1:
-            # attention paramters
-            self.attn_layer = AttentionLayer(
-                hidden_size + hidden_size * self.num_hidden_state,
-                hidden_size
-            )
-        # Value
-        if self.dueling:
-            self.val_score_layer = nn.Linear(
-                hidden_size * self.num_hidden_state,
-                1
-            )
-        # Advantage
-        self.adv_score_layer = ScoreLayer(
-            left_dim=hidden_size,
-            right_dim=hidden_size * self.num_hidden_state,
-            num_labels=args.num_labels
+        self.lstm = nn.LSTM(
+            input_size=hidden_size,
+            hidden_size=hidden_size,
+            dropout=dropout,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+            bias=True
         )
-    
-    def calc_state_semantic(self, features, mask, mode):
-        batch, _, hidden_size = features.size()
-        if mode == 'mean':
-            num = mask.sum(dim=1).view(-1, 1, 1).expand(-1, 1, hidden_size)
-            state_semantic = features.sum(dim=1, keepdim=True).div(num)
-            assert num.size() == torch.Size((batch, 1, hidden_size))
-        elif mode == 'max':
-            state_semantic = features \
-                                .masked_fill(mask.unsqueeze(2) == 0,
-                                             float('-inf')) \
-                                .max(dim=1, keepdim=True)[0]
-        else:
-            raise ValueError('mode error')
-        return state_semantic
+        self.tanh = nn.Tanh()
+        self.fc = nn.Linear(2 * hidden_size, hidden_size)
 
-    def forward(self, states, state_mask, actions, actions_mask):
+        self.transformer = Transformer(
+            dim=hidden_size,
+            nheads=nheads,
+            dropout=dropout
+        )
+
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * hidden_size, hidden_size),
+            nn.ReLU(True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, num_labels),
+        )
+
+    def forward(self, claims, evidences, evidences_mask):
         '''
-        states: [batch, seq, hidden_size]
-        state_mask: [batch, seq]
-        actions: [batch, seq2, hidden_size]
-        actions_mask: [batch, seq2]
+        claims: [batch, hidden_size]
+        evidences: [batch, seq, hidden_size]
+        evidences_mask: [batch, seq]
 
         return:
             [batch * available_seq2, num_labels]
         '''
-        batch, seq, hidden_size = states.size()
-        seq2, num_labels = actions.size(1), 3
-        # [batch, seq, hidden_size * num_hidden_state]
-        out, _ = self.lstm(states)
-        out = self.tanh(out)
-        assert out.size() == torch.Size((batch, seq, self.num_hidden_state * hidden_size))
+        batch, seq, hidden_size = evidences.size()
+        num_labels = self.num_labels
         
-        if self.aggregate.find('attn') != -1:
-            # [batch, seq2, hidden_size * num_hidden_state]
-            states_feat = self.attn_layer(
-                query=actions,
-                key=out,
-                value=out,
-                q_mask=actions_mask,
-                k_mask=state_mask
-            )
-            state_semantic = self.calc_state_semantic(
-                states_feat, actions_mask,
-                'mean' if self.aggregate.find('mean') != -1 else 'max'
-            )
-        else:
-            if self.aggregate in {'max', 'mean'}:
-                state_semantic = self.calc_state_semantic(out, state_mask, self.aggregate)
-            elif self.aggregate == 'last':
-                last_step = state_mask.sum(dim=1) \
-                                .sub(1) \
-                                .type(torch.long) \
-                                .view(-1, 1, 1) \
-                                .expand(-1, -1, 2 * hidden_size)
-                state_semantic = out.gather(dim=1, index=last_step)
-            states_feat = state_semantic.expand(-1, seq2, -1)
-        assert state_semantic.size() == torch.Size((batch, 1, self.num_hidden_state * hidden_size))
-        assert states_feat.size() == torch.Size((batch, seq2, self.num_hidden_state * hidden_size))
+        evidences, _ = self.lstm(evidences)
+        evidences = self.fc(self.tanh(evidences))
+        assert evidences.size() == torch.Size((batch, seq, hidden_size))
+        assert claims.size() == torch.Size((batch, hidden_size))
         
-        # Value - [batch, seq2, num_labels]
-        if self.dueling:
-            val_scores = self.val_score_layer(state_semantic)
-            assert val_scores.size() == torch.Size((batch, 1, 1))
+        output = self.transformer(
+            query = claims.unsqueeze(1),
+            key=evidences,
+            value=evidences,
+            q_mask=torch.ones([batch, 1], dtype=torch.float).to(evidences_mask),
+            k_mask=evidences_mask
+        )
+        assert output.size() == torch.Size((batch, 1, hidden_size))
+        
+        q_value = self.mlp(torch.cat([claims, output.squeeze(1)], dim=-1))
+        assert q_value.size() == torch.Size((batch, 3))
+        #pdb.set_trace()
 
-            val_scores = val_scores.expand(-1, seq2, num_labels)
-            assert val_scores.size() == torch.Size((batch, seq2, num_labels))
-        
-        # Advantage - [batch, seq2, num_labels]
-        adv_scores = self.adv_score_layer(left_inputs=actions, right_inputs=states_feat)
-        assert adv_scores.size() == torch.Size((batch, seq2, num_labels))
-        
-        # Q value - [batch, seq2, num_labels]
-        if self.dueling:
-            q_value = val_scores + adv_scores - adv_scores.mean(dim=(2, 1), keepdim=True)
-        else:
-            q_value = adv_scores
-        assert q_value.size() == torch.Size((batch, seq2, num_labels))
-        
-        # 去除padding的action对应的score
-        no_pad = actions_mask.view(-1).nonzero().view(-1)
-        q_value = q_value.reshape(-1, num_labels)[no_pad]
         return (q_value,)
 
 
@@ -462,18 +468,14 @@ class LstmDQN(BaseDQN):
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-        self.model_type = args.model_type.lower()
-        config_class, _, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config_class, _, _ = MODEL_CLASSES[args.model_type]
         config = config_class.from_pretrained(args.model_name_or_path)
-        
-        self.tokenizer = tokenizer_class.from_pretrained(
-            args.model_name_or_path,
-            do_lower_case=args.do_lower_case,
-        )
         # q network
         self.q_net = QNetwork(
-            args,
+            num_layers=args.num_layers,
             hidden_size=config.hidden_size,
+            num_labels=args.num_labels,
+            nheads=args.nhead,
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
@@ -484,40 +486,38 @@ class LstmDQN(BaseDQN):
         if args.local_rank == 0:
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
+        #self.optimizer = SGD(self.q_net.parameters(), lr=args.learning_rate, momentum=0.9)
         self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
         #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
-    def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
-        return tuple(self.tokenizer.encode(text_sequence,
-                                           add_special_tokens=False,
-                                           max_length=max_length))
-    
+
     def convert_to_inputs_for_select_action(self, batch_state: List[State], batch_actions: List[List[Action]]) -> List[dict]:
         assert len(batch_state) == len(batch_actions)
-        batch_state_tensor, batch_actions_tensor = [], []
+        batch_claims, batch_evidences = [], []
         for state, actions in zip(batch_state, batch_actions):
             # tokens here is actually the sentence embedding
+            ## [1, dim]
+            batch_claims.extend([state.claim.tokens] * len(actions))
             ## [seq, dim]
-            state_tensor = torch.tensor([state.claim.tokens] + [sent.tokens for sent in state.candidate],
-                                        dtype=torch.float)
-            ## [seq2, dim]
-            actions_tensor = torch.tensor([action.sentence.tokens for action in actions],
-                                          dtype=torch.float)
-            batch_state_tensor.append(state_tensor)
-            batch_actions_tensor.append(actions_tensor)
-        return convert_tensor_to_lstm_inputs(batch_state_tensor, batch_actions_tensor)
+            evidence = [sent.tokens for sent in state.candidate]
+            batch_evidences.extend(
+                [torch.tensor(evidence + [action.sentence.tokens],
+                              dtype=torch.float) for action in actions],
+            )
+        return convert_tensor_to_lstm_inputs(batch_claims, batch_evidences)
     
 
     def convert_to_inputs_for_update(self, states: List[State], actions: List[Action]) -> dict:
         assert len(states) == len(actions)
-        batch_state_tensor, batch_actions_tensor = [], []
+        batch_claims, batch_evidences = [], []
         for state, action in zip(states, actions):
+            ## [1, dim]
+            batch_claims.append(state.claim.tokens)
             ## [seq, dim]
-            state_tensor = torch.tensor([state.claim.tokens] + [sent.tokens for sent in state.candidate],
-                                        dtype=torch.float)
-            ## [seq2, dim]
-            actions_tensor = torch.tensor([action.sentence.tokens], dtype=torch.float)
-            batch_state_tensor.append(state_tensor)
-            batch_actions_tensor.append(actions_tensor)
-        return convert_tensor_to_lstm_inputs(batch_state_tensor, batch_actions_tensor, self.device)
+            evidence = [sent.tokens for sent in state.candidate]
+            batch_evidences.append(
+                torch.tensor(evidence + [action.sentence.tokens],
+                             dtype=torch.float)
+            )
+        return convert_tensor_to_lstm_inputs(batch_claims, batch_evidences, self.device)
 
