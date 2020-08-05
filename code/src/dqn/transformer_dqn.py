@@ -224,7 +224,7 @@ class Transformer(nn.Module):
     #        nn.init.zeros_(self.value_layer.weight)
     #        nn.init.uniform_(self.value_layer, -initrange, initrange)
     
-    def forward(self, query, key, value, q_mask, k_mask):
+    def forward(self, query, q_mask, key=None, value=None, k_mask=None):
         '''
         query: [B, L_q, D_q]
         key: [B, L_k, D_k]
@@ -232,6 +232,11 @@ class Transformer(nn.Module):
         q_mask: [B, L_q]
         k_mask: [B, L_k]
         '''
+        if key is None:
+            key = query
+            value = query
+            k_mask = q_mask
+
         B, L_q, dim = query.size()
         L_k = key.size(1)
 
@@ -245,15 +250,15 @@ class Transformer(nn.Module):
         dim = (dim // self.nheads) * self.nheads
         assert output.size() == torch.Size((B, L_q, dim))
         output = self.pos_fc(output)
-        return output
+        return output, q_mask
 
 class QNetwork(nn.Module):
     def __init__(self,
                  num_labels,
                  hidden_size,
                  dropout=0.1,
-                 nheads=8):
-                 #num_layers=3,
+                 nheads=8,
+                 num_layers=3):
                  #dueling=False):
         super(QNetwork, self).__init__()
         # Transformer
@@ -269,9 +274,11 @@ class QNetwork(nn.Module):
         #if dueling:
         #    self.value_layer = nn.Linear(hidden_size, 1)
         self.nheads = nheads
-        self.transformer_1 = Transformer(dim=hidden_size,
-                                         nheads=nheads,
-                                         dropout=dropout)
+        self.num_layers = num_layers
+        for i in range(num_layers):
+            setattr(self, 'transf:%d' % i, Transformer(dim=hidden_size,
+                                                       nheads=nheads,
+                                                       dropout=dropout))
         self.transformer_2 = Transformer(dim=hidden_size,
                                          nheads=nheads,
                                          dropout=dropout)
@@ -293,16 +300,11 @@ class QNetwork(nn.Module):
         '''
         batch, seq, hidden_size = evidences.size()
         num_labels, nheads = 3, self.nheads
-        
-        evidences = self.transformer_1(
-            query=evidences,
-            key=evidences,
-            value=evidences,
-            q_mask=evidences_mask,
-            k_mask=evidences_mask
-        )
+        for i in range(self.num_layers):
+            layer = getattr(self, 'transf:%d' % i)
+            evidences, _ = layer(evidences, evidences_mask)
         assert evidences.size() == torch.Size((batch, seq, hidden_size))
-        output = self.transformer_2(
+        output, _ = self.transformer_2(
             query = claims.unsqueeze(1),
             key=evidences,
             value=evidences,
@@ -333,6 +335,7 @@ class TransformerDQN(BaseDQN):
             #dropout=config.dropout,
             num_labels=args.num_labels,
             nheads=args.nhead,
+            num_layers=args.num_layers
         )
         # Target network
         self.t_net = deepcopy(self.q_net) if args.do_train else self.q_net
