@@ -144,20 +144,32 @@ class BaseDQN:
             
             del pred_labels
             
-        del labels, scores
-
+        del labels
+         
         # compute Huber loss
-        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
-                                reduction='none')
+        rl_loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
+                                   reduction='none')
         if isweights != None:
             isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
-            assert loss.size() == isweights.size()
-            mloss = (loss * isweights).mean()
+            assert rl_loss.size() == isweights.size()
+            _rl_loss = (rl_loss * isweights).mean()
         else:
-            mloss = loss.mean()
+            _rl_loss = rl_loss.mean()
         
+        # supervise learning
+        def contains_golden_evidence(golden_set, predict_evdience):
+            if not len(golden_set): return True
+            golden_id = [set([sent.id for sent in evi]) for evi in golden_set]
+            predict_id = set([sent.id for sent in predict_evdience])
+            return any([len(id1 & predict_id) for id1 in golden_id])
+        mask = torch.tensor([contains_golden_evidence(state.evidence_set, state.candidate) for state in batch.next_state]).to(scores)
+        labels = torch.tensor([state.label for state in batch.next_state], dtype=torch.long).to(self.device)
+        sl_loss = (F.cross_entropy(scores, labels, reduction='none') * mask).sum() / max(1, mask.sum())
         # optimize model
-        mloss.backward()
+        loss = _rl_loss + sl_loss
+
+        # optimize model
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),
                                        self.args.max_grad_norm)
         self.optimizer.step()
@@ -167,7 +179,7 @@ class BaseDQN:
         
         self.steps_done += 1
 
-        return loss.detach().cpu().data
+        return rl_loss.detach().cpu().data, sl_loss.detach().cpu().data, loss.detach().cpu().data
 
 
     @property
