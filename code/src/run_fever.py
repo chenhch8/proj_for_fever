@@ -163,15 +163,15 @@ def train(args,
                     else:
                         batch = memory.sample(args.train_batch_size)
                         isweights = None
-                    loss = agent.update(batch, isweights,
-                                        log=step % log_per_steps == 0 or step == 5)
+                    loss, mloss = agent.update(batch, isweights,
+                                              log=step % log_per_steps == 0 or step == 5)
                     if args.mem.find('priority') != -1:
                         memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()
-                    t_loss += loss
+                    t_loss += mloss
                     t_steps += 1
-                    losses.append(loss)
-                    epoch_iterator.set_description('%.8f' % loss)
+                    losses.append(mloss)
+                    epoch_iterator.set_description('%.4f(%.4f)' % (mloss, loss))
                     epoch_iterator.refresh()
                 
                 if len(batch_state) == 0: break
