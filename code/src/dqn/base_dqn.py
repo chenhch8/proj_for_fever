@@ -166,7 +166,7 @@ class BaseDQN:
         labels = torch.tensor([state.label for state in batch.next_state], dtype=torch.long).to(self.device)
         sl_loss = (F.cross_entropy(scores, labels, reduction='none') * mask).sum() / max(1, mask.sum())
         # optimize model
-        loss = _rl_loss + sl_loss
+        loss = _rl_loss + 10 * sl_loss
 
         # optimize model
         loss.backward()
