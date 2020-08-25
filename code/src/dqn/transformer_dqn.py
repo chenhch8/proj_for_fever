@@ -348,6 +348,8 @@ class TransformerDQN(BaseDQN):
         
         #self.optimizer = SGD(self.q_net.parameters(), lr=args.learning_rate, momentum=0.9)
         self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
+        self.scheduler = lr_scheduler.LambdaLR(self.optimizer,
+                                               lr_lambda=lambda epoch: max(np.power(0.5, epoch // 500), 2e-6 / args.learning_rate))
         #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
 
