@@ -161,7 +161,7 @@ class BaseDQN:
             if not len(golden_set): return True
             golden_id = [set([sent.id for sent in evi]) for evi in golden_set]
             predict_id = set([sent.id for sent in predict_evdience])
-            return any([len(id1 & predict_id) for id1 in golden_id])
+            return any([len(id1 - predict_id) == 0 for id1 in golden_id])
         mask = torch.tensor([contains_golden_evidence(state.evidence_set, state.candidate) for state in batch.next_state]).to(scores)
         labels = torch.tensor([state.label for state in batch.next_state], dtype=torch.long).to(self.device)
         sl_loss = (F.cross_entropy(scores, labels, reduction='none') * mask).sum() / max(1, mask.sum())
