@@ -13,7 +13,7 @@ from torch import nn
 #from torch.nn import TransformerEncoderLayer, TransformerEncoder
 from torch.nn.parameter import Parameter
 from torch.nn.utils.rnn import pad_sequence
-from torch.optim import SGD, Adam, AdamW
+from torch.optim import SGD, Adam, AdamW, lr_scheduler
 #from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 #from torch.utils.data.distributed import DistributedSampler
 from transformers import (
