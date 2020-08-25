@@ -164,7 +164,12 @@ class BaseDQN:
             return any([len(id1 - predict_id) == 0 for id1 in golden_id])
         mask = torch.tensor([contains_golden_evidence(state.evidence_set, state.candidate) for state in batch.next_state]).to(scores)
         labels = torch.tensor([state.label for state in batch.next_state], dtype=torch.long).to(self.device)
-        sl_loss = (F.cross_entropy(scores, labels, reduction='none') * mask).sum() / max(1, mask.sum())
+        
+        binary_labels = torch.zeros_like(scores).to(self.device)
+        binary_labels[[torch.arange(labels.size(0)).to(labels), labels]] = 1
+        
+        sl_loss = (F.binary_cross_entropy_with_logits(scores, binary_labels, reduction='none') * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())
+
         # optimize model
         loss = _rl_loss + 10 * sl_loss
 
