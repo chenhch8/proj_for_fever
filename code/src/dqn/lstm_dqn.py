@@ -14,7 +14,7 @@ import torch
 from torch import nn
 from torch.nn.parameter import Parameter
 from torch.nn.utils.rnn import pad_sequence
-from torch.optim import SGD, Adam, AdamW
+from torch.optim import SGD, Adam, AdamW, lr_scheduler
 #from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 #from torch.utils.data.distributed import DistributedSampler
 
@@ -485,6 +485,8 @@ class LstmDQN(BaseDQN):
             torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
         
         self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
+        self.scheduler = lr_scheduler.LambdaLR(self.optimizer,
+                                               lr_lambda=lambda epoch: max(np.power(0.5, epoch // 100), 5e-6 / args.learning_rate))
         #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
     def token(self, text_sequence: str, max_length: int=None) -> Tuple[int]:
