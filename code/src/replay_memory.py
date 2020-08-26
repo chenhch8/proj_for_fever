@@ -77,8 +77,8 @@ class PrioritizedReplayMemory(ReplayMemory):
         #isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
         #                     -self.beta).tolist()
         isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-                             -self.beta)
-        isweights = (isweights / isweights.max()).tolist()
+                             -self.beta).tolist()
+        #isweights = (isweights / isweights.max()).tolist()
 
         return idxs, isweights, batch
 
