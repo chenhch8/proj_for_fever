@@ -5,6 +5,7 @@ import numpy as np
 from typing import List, Tuple
 from data.structure import Transition
 
+import pdb
 
 class ReplayMemory:
     def __init__(self, capacity: int) -> None:
@@ -73,7 +74,7 @@ class PrioritizedReplayMemory(ReplayMemory):
             isweights.append(priority / self.tree[0])
             batch.append(self.memory[idx + 1 - self.capacity])
             idxs.append(idx)
-
+            
         isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
                              -self.beta).tolist()
 

@@ -7,6 +7,8 @@ import pdb
 import math
 from typing import Tuple, List
 
+import pdb
+
 import numpy as np
 import torch
 from torch import nn
@@ -150,6 +152,12 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         self.layer_norm = nn.LayerNorm(dim)
+        self.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            nn.init.xavier_uniform(m.weight)
+            m.bias.data.fill_(0)
 
     def forward(self, query, key, value, q_mask, k_mask):
         '''
