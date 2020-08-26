@@ -144,19 +144,14 @@ class BaseDQN:
             
             del pred_labels
             
+                #del labels, scores
         del labels
-         
-        # compute Huber loss
+
+	    # compute Huber loss
         rl_loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
-                                   reduction='none')
-        if isweights != None:
-            isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
-            assert rl_loss.size() == isweights.size()
-            _rl_loss = (rl_loss * isweights).mean()
-        else:
-            _rl_loss = rl_loss.mean()
-        
-        # supervise learning
+				   reduction='none')
+
+	    # binary loss
         def contains_golden_evidence(golden_set, predict_evdience):
             if not len(golden_set): return True
             golden_id = [set([sent.id for sent in evi]) for evi in golden_set]
@@ -168,10 +163,18 @@ class BaseDQN:
         binary_labels = torch.zeros_like(scores).to(self.device)
         binary_labels[[torch.arange(labels.size(0)).to(labels), labels]] = 1
         
-        sl_loss = (F.binary_cross_entropy_with_logits(scores, binary_labels, reduction='none') * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())
-
-        # optimize model
-        loss = _rl_loss + 10 * sl_loss
+        sl_loss = F.binary_cross_entropy_with_logits(scores, binary_labels, reduction='none')
+        
+        # total loss
+        if isweights != None:
+            isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
+            assert rl_loss.size() == isweights.size()
+            loss = (rl_loss * isweights).mean() + \
+                   (sl_loss * mask.view(-1, 1) * isweights.view(-1, 1)).sum() / max(1, 3 * mask.sum())
+        else:
+            loss = rl_loss.mean() + \
+                       (sl_loss * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())
+        loss_vec = rl_loss + sl_loss.mean(dim=1) * mask
 
         # optimize model
         loss.backward()
@@ -183,8 +186,11 @@ class BaseDQN:
         self.q_net.zero_grad()
         
         self.steps_done += 1
-
-        return rl_loss.detach().cpu().data, sl_loss.detach().cpu().data, loss.detach().cpu().data
+        
+        return loss_vec.detach().cpu().data, \
+               rl_loss.detach().mean().cpu().data, \
+               ((sl_loss.detach() * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())).cpu().data, \
+               loss.detach().cpu().data
 
 
     @property

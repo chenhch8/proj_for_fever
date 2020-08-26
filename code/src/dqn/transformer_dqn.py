@@ -150,6 +150,12 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         self.layer_norm = nn.LayerNorm(dim)
+        self.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.xavier_normal_(m.weight)
+            m.bias.data.fill_(0)
 
     def forward(self, query, key, value, q_mask, k_mask):
         '''
