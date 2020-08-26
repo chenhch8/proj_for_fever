@@ -147,11 +147,11 @@ class BaseDQN:
         #del labels, scores
         del labels
 
-	# compute Huber loss
+	    # compute Huber loss
         rl_loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
 				   reduction='none')
 
-	# binary loss
+	    # binary loss
         def contains_golden_evidence(golden_set, predict_evdience):
             if not len(golden_set): return True
             golden_id = [set([sent.id for sent in evi]) for evi in golden_set]
