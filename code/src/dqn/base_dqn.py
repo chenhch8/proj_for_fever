@@ -144,7 +144,7 @@ class BaseDQN:
             
             del pred_labels
             
-        del labels, scores
+        #del labels, scores
 
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
@@ -155,7 +155,8 @@ class BaseDQN:
             mloss = (loss * isweights).mean()
         else:
             mloss = loss.mean()
-        
+        if torch.isnan(mloss):
+            pdb.set_trace()
         # optimize model
         mloss.backward()
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),
