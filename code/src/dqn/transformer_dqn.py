@@ -150,6 +150,12 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         self.layer_norm = nn.LayerNorm(dim)
+        self.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.xavier_normal_(m.weight)
+            m.bias.data.fill_(0)
 
     def forward(self, query, key, value, q_mask, k_mask):
         '''
@@ -213,16 +219,6 @@ class Transformer(nn.Module):
         self.attention = MultiHeadAttention(dim=dim, nheads=nheads, dropout=dropout)
         dim = (dim // nheads) * nheads
         self.pos_fc = PositionalWiseFeedForward(dim=dim, dropout=dropout, ffn_dim=dim)
-    
-    #def init_weights(self):
-    #    initrange = 0.1
-    #    nn.init.uniform_(self.encoder.weight, -initrange, initrange)
-    #    for module in self.decoder.modules():
-    #        nn.init.zeros_(module.weight)
-    #        nn.init.uniform_(module.weight, -initrange, initrange)
-    #    if self.dueling:
-    #        nn.init.zeros_(self.value_layer.weight)
-    #        nn.init.uniform_(self.value_layer, -initrange, initrange)
     
     def forward(self, query, q_mask, key=None, value=None, k_mask=None):
         '''
