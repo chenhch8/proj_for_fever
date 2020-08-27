@@ -15,18 +15,10 @@ class ReplayMemory:
         self.position = 0
         self.length = 0
     
-    def epsilon_greedy(self) -> bool:
-        # epsilon greedy
-        sample = random.random()
-        threshold = 0.05 + (1. - 0.05) * math.exp(-1. * self.eps_count / 1000)
-        self.eps_count += 1
-        return sample < threshold
-
     def reset(self) -> None:
         self.position = 0
         self.length = 0
         self.sequences = {}
-        self.eps_count = 0
 
     def push(self, item: Transition) -> None:
         self.memory[self.position] = item
@@ -40,20 +32,9 @@ class ReplayMemory:
         self.sequences[key].extend(sequences)
 
     def sample(self, batch_size: int) -> List[Transition]:
-        batch = []
-        if self.epsilon_greedy:
-            batch += self.sample_from_sequences()[:batch_size]
-        if len(batch) < batch_size:
-            batch += random.sample(self.memory[:self.length],
-                                   min(batch_size - len(data), self.length))
+        batch += random.sample(self.memory[:self.length],
+                               min(batch_size, self.length))
         return batch
-
-    def sample_from_sequences(self):
-        data = []
-        for sequences in self.sequences.values():
-            data += random.choice(sequences)
-        random.shuffle(data)
-        return data
 
     def __len__(self) -> int:
         return self.length
