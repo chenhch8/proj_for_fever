@@ -159,12 +159,10 @@ def train(args,
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
                     if args.mem.find('priority') != -1:
-                        tree_idx, isweights, batch = memory.sample(args.train_batch_size)
+                        tree_idx, batch = memory.sample(args.train_batch_size)
                     else:
                         batch = memory.sample(args.train_batch_size)
-                        isweights = None
-                    loss = agent.update(batch, isweights,
-                                        log=step % log_per_steps == 0 or step == 5)
+                    loss = agent.update(batch, log=step % log_per_steps == 0 or step == 5)
                     if args.mem.find('priority') != -1:
                         memory.batch_update_sumtree(tree_idx, loss.tolist())
                     loss = loss.mean().item()

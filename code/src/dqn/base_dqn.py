@@ -62,7 +62,7 @@ class BaseDQN:
             )
 
 
-    def update(self, transitions: List[Transition], isweights: List[float]=None, log=False) -> float:
+    def update(self, transitions: List[Transition], log=False) -> float:
         self.q_net.train()
         self.t_net.eval()
         
@@ -149,12 +149,7 @@ class BaseDQN:
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
                                 reduction='none')
-        if isweights != None:
-            isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
-            assert loss.size() == isweights.size()
-            mloss = (loss * isweights).mean()
-        else:
-            mloss = loss.mean()
+        mloss = loss.mean()
         
         # optimize model
         mloss.backward()

@@ -58,8 +58,8 @@ class PrioritizedReplayMemory(ReplayMemory):
             priority = self.abs_err_upper
         self.update_sumtree(idx, priority, is_error=False)
 
-    def sample(self, batch_size: int) -> Tuple[List[int], List[float], List[Transition]]:
-        idxs, isweights, batch = [], [], []
+    def sample(self, batch_size: int) -> Tuple[List[int], List[Transition]]:
+        idxs, batch = [], []
         segment = self.tree[0] / batch_size
         
         self.beta = min(1., self.beta + self.beta_increment_per_sampling)
@@ -70,17 +70,10 @@ class PrioritizedReplayMemory(ReplayMemory):
 
             s = random.uniform(a, b)
             idx, priority = self.get_from_sumtree(s)
-            isweights.append(priority / self.tree[0])
             batch.append(self.memory[idx + 1 - self.capacity])
             idxs.append(idx)
 
-        #isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-        #                     -self.beta).tolist()
-        isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-                             -self.beta)
-        isweights = (isweights / isweights.max()).tolist()
-
-        return idxs, isweights, batch
+        return idxs, batch
 
     def update_sumtree(self, idx: int, value: float, is_error: bool=True) -> None:
         priority = self._get_priority(value) if is_error else value
