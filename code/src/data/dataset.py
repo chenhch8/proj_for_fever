@@ -10,10 +10,11 @@ from torch.utils.data import Dataset
 from .structure import *
 
 class FeverDataset(Dataset):
-    def __init__(self, file_name_or_path: str, label2id: dict=None):
+    def __init__(self, file_name_or_path: str, label2id: dict=None, is_raw: bool=False):
         super(FeverDataset, self).__init__()
         self.is_dir = os.path.isdir(file_name_or_path)
         self.label2id = label2id
+        self.is_raw = is_raw
         if self.is_dir:
             names = sorted(os.listdir(file_name_or_path), key=lambda x: int(x[:-3]))
             self.data = list(map(lambda f: os.path.join(file_name_or_path, f), names))
@@ -30,6 +31,8 @@ class FeverDataset(Dataset):
             claim, label, evidence_set, sentences = self.load_data(self.data[index])
         else:
             claim, label, evidence_set, sentences = self.data[index]
+        if self.is_raw:
+            return claim, label, evidence_set, sentences
         states = [State(
             claim=claim,
             label=label,
@@ -45,9 +48,8 @@ class FeverDataset(Dataset):
         return len(self.data)
 
 def collate_fn(batch):
-    batch_state, batch_actions = [], []
-    for states, actions in batch:
-        batch_state.extend(states)
-        batch_actions.extend(actions)
-    return batch_state, batch_actions
+    data = []
+    for item in batch:
+        data.append(item)
+    return list(zip(*data))
 
