@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 # coding: utf-8
 import random
+import math
 import numpy as np
+from collections import defaultdict
 from typing import List, Tuple
 from data.structure import Transition
 
@@ -12,19 +14,46 @@ class ReplayMemory:
         self.memory = [None] * capacity
         self.position = 0
         self.length = 0
+    
+    def epsilon_greedy(self) -> bool:
+        # epsilon greedy
+        sample = random.random()
+        threshold = 0.05 + (1. - 0.05) * math.exp(-1. * self.eps_count / 1000)
+        self.eps_count += 1
+        return sample < threshold
 
     def reset(self) -> None:
         self.position = 0
         self.length = 0
+        self.sequences = {}
+        self.eps_count = 0
 
     def push(self, item: Transition) -> None:
         self.memory[self.position] = item
         self.position = (self.position + 1) % self.capacity
         self.length = min(self.length + 1, self.capacity)
 
+    def push_sequence(self, key, sequences: List[List[Transition]]):
+        if not len(sequences): return
+        if key not in self.sequences:
+            self.sequences[key] = []
+        self.sequences[key].extend(sequences)
+
     def sample(self, batch_size: int) -> List[Transition]:
-        return random.sample(self.memory[:self.length],
-                             min(self.length, batch_size))
+        batch = []
+        if self.epsilon_greedy:
+            batch += self.sample_from_sequences()[:batch_size]
+        if len(batch) < batch_size:
+            batch += random.sample(self.memory[:self.length],
+                                   min(batch_size - len(data), self.length))
+        return batch
+
+    def sample_from_sequences(self):
+        data = []
+        for sequences in self.sequences.values():
+            data += random.choice(sequences)
+        random.shuffle(data)
+        return data
 
     def __len__(self) -> int:
         return self.length
@@ -58,8 +87,8 @@ class PrioritizedReplayMemory(ReplayMemory):
             priority = self.abs_err_upper
         self.update_sumtree(idx, priority, is_error=False)
 
-    def sample(self, batch_size: int) -> Tuple[List[int], List[float], List[Transition]]:
-        idxs, isweights, batch = [], [], []
+    def sample(self, batch_size: int) -> Tuple[List[int], List[Transition]]:
+        idxs, batch = [], []
         segment = self.tree[0] / batch_size
         
         self.beta = min(1., self.beta + self.beta_increment_per_sampling)
@@ -70,17 +99,10 @@ class PrioritizedReplayMemory(ReplayMemory):
 
             s = random.uniform(a, b)
             idx, priority = self.get_from_sumtree(s)
-            isweights.append(priority / self.tree[0])
             batch.append(self.memory[idx + 1 - self.capacity])
             idxs.append(idx)
 
-        #isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-        #                     -self.beta).tolist()
-        isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-                             -self.beta).tolist()
-        #isweights = (isweights / isweights.max()).tolist()
-
-        return idxs, isweights, batch
+        return idxs, batch
 
     def update_sumtree(self, idx: int, value: float, is_error: bool=True) -> None:
         priority = self._get_priority(value) if is_error else value
@@ -94,6 +116,7 @@ class PrioritizedReplayMemory(ReplayMemory):
 
     def batch_update_sumtree(self, batch_idx: List[int], batch_value: List[float], is_error: bool=True) -> None:
         for idx, value in zip(batch_idx, batch_value):
+            if idx == -1: continue
             self.update_sumtree(idx, value, is_error)
 
     def get_from_sumtree(self, x: float) -> Tuple[int, float]:
