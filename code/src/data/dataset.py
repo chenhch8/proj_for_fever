@@ -41,7 +41,7 @@ class FeverDataset(Dataset):
                       pred_label=idx,
                       candidate=[],
                       count=0
-        ) for idx in self.label2.values()]
+        ) for idx in self.label2id.values()]
         actions = [[Action(sentence=sent, label='F/T/N') for sent in sentences] for _ in range(len(self.label2id))]
         return state, actions
 

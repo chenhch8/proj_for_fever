@@ -75,17 +75,6 @@ class QNetwork(nn.Module):
                  #dueling=False):
         super(QNetwork, self).__init__()
         # Transformer
-        #self.pos_encoder = PositionalEncoding(hidden_size,
-        #                                      dropout=dropout,
-        #                                      max_len=6)
-        #encoder_layers = TransformerEncoderLayer(d_model=hidden_size,
-        #                                         nhead=nhead,
-        #                                         dropout=dropout)
-        #self.encoder = TransformerEncoder(encoder_layers,
-        #                                  num_layers=num_layers)
-        ## Value
-        #if dueling:
-        #    self.value_layer = nn.Linear(hidden_size, 1)
         self.nheads = nheads
         self.num_layers = num_layers
         for i in range(num_layers):
@@ -97,7 +86,7 @@ class QNetwork(nn.Module):
         self.transformer = Transformer(dim=hidden_size,
                                        nheads=nheads,
                                        dropout=dropout)
-        self.mlp = ScoreLayer()
+        self.mlp = ScoreLayer(hidden_size, num_labels, dropout)
 
     def forward(self, claims, evidences, evidences_mask):
         '''
@@ -113,7 +102,7 @@ class QNetwork(nn.Module):
         
         for i in range(self.num_layers):
             layer = getattr(self, 'encoder_%d' % i)
-            evidences = layer(
+            evidences, _ = layer(
                 query=evidences,
                 key=evidences,
                 value=evidences,
@@ -121,7 +110,7 @@ class QNetwork(nn.Module):
                 k_mask=evidences_mask
             )
         assert evidences.size() == torch.Size((batch, seq, hidden_size))
-        output = self.transformer(
+        output, _ = self.transformer(
             query = claims.unsqueeze(1),
             key=evidences,
             value=evidences,
@@ -165,8 +154,6 @@ class TransformerDQN(BaseDQN):
         
         #self.optimizer = SGD(self.q_net.parameters(), lr=args.learning_rate, momentum=0.9)
         self.optimizer = AdamW(self.q_net.parameters(), lr=args.learning_rate)
-        self.scheduler = lr_scheduler.LambdaLR(self.optimizer,
-                                               lr_lambda=lambda epoch: max(np.power(0.5, epoch // 500), 2e-6 / args.learning_rate))
         #self.optimizer = Adam(self.q_net.parameters(), lr=args.learning_rate)
 
 

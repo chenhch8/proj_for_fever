@@ -27,7 +27,7 @@ from dqn.transformer_dqn import TransformerDQN, transformer_load_and_process_dat
 from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import *
-from data.dataset import collate_fn, FeverDataset, COncatDataset
+from data.dataset import collate_fn, FeverDataset, ConcatDataset
 from config import set_com_args, set_dqn_args, set_bert_args
 from eval.calc_score import calc_fever_score, truncate_q_values, calc_test_result, calc_fever2_score
 
@@ -75,7 +75,7 @@ def generate_sequences(claim: Claim, label_id: int, evidence_set: EvidenceSet,
                   count=0)
     if label_id == label2id['NOT ENOUGH INFO']:
         assert len(evidence_set) == 0
-        evi_len = np.random.choise([1, 2, 3, 4, 5], 1, [0.82, 0.06, 0.05, 0.04, 0.03])[0]
+        evi_len = np.random.choice([1, 2, 3, 4, 5], 1, [0.82, 0.06, 0.05, 0.04, 0.03])[0]
         evidence_set = [random.sample(sentences, min(len(sentences), evi_len))]
     # T/F/N sequences
     all_sequences = []
@@ -145,7 +145,7 @@ def train(args,
     else:
         memory = Memory[args.mem](args.capacity, args.num_labels, args.proportion)
     
-    data_loader = DataLoader(COncatDataset(train_dataset, raw_dataset),
+    data_loader = DataLoader(ConcatDataset(train_dataset, raw_dataset),
                              num_workers=1,
                              collate_fn=collate_fn,
                              batch_size=args.train_batch_size,
@@ -171,7 +171,7 @@ def train(args,
                 steps_trained_in_current_epoch -= 1
                 continue
             batch_state_list, batch_actions_list = list(zip(*batch_train_data))
-            batch_state = list(chain.from_iterable(batch_states_list))
+            batch_state = list(chain.from_iterable(batch_state_list))
             batch_actions = list(chain.from_iterable(batch_actions_list))
             # 生产真实 transitions
             sequences = []
