@@ -7,6 +7,8 @@ import pdb
 import math
 from typing import Tuple, List
 
+import pdb
+
 import numpy as np
 import torch
 from torch import nn
@@ -26,6 +28,7 @@ from transformers import (
 from .base_dqn import BaseDQN
 from .lstm_dqn import lstm_load_and_process_data
 from data.structure import *
+from networks import Transformer, ScoreLayer
 
 CONFIG_CLASSES = {
     'bert': BertConfig,
@@ -62,197 +65,6 @@ def convert_tensor_to_transformer_inputs(batch_claims: List[List[float]],
     }
 
 
-#class PositionalEncoding(nn.Module):
-#    r"""Inject some information about the relative or absolute position of the tokens
-#        in the sequence. The positional encodings have the same dimension as
-#        the embeddings, so that the two can be summed. Here, we use sine and cosine
-#        functions of different frequencies.
-#    .. math::
-#        \text{PosEncoder}(pos, 2i) = sin(pos/10000^(2i/d_model))
-#        \text{PosEncoder}(pos, 2i+1) = cos(pos/10000^(2i/d_model))
-#        \text{where pos is the word position and i is the embed idx)
-#    Args:
-#        d_model: the embed dim (required).
-#        dropout: the dropout value (default=0.1).
-#        max_len: the max. length of the incoming sequence (default=5000).
-#    Examples:
-#        >>> pos_encoder = PositionalEncoding(d_model)
-#    """
-#
-#    def __init__(self, d_model, dropout=0.1, max_len=5000):
-#        super(PositionalEncoding, self).__init__()
-#        self.dropout = nn.Dropout(p=dropout)
-#
-#        pe = torch.zeros(max_len, d_model)
-#        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-#        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-#        pe[:, 0::2] = torch.sin(position * div_term)
-#        pe[:, 1::2] = torch.cos(position * div_term)
-#        pe = pe.unsqueeze(0).transpose(0, 1)
-#        self.register_buffer('pe', pe)
-#
-#    def forward(self, x):
-#        r"""Inputs of forward function
-#        Args:
-#            x: the sequence fed to the positional encoder model (required).
-#        Shape:
-#            x: [sequence length, batch size, embed dim]
-#            output: [sequence length, batch size, embed dim]
-#        Examples:
-#            >>> output = pos_encoder(x)
-#        """
-#
-#        x = x + self.pe[:x.size(0), :]
-#        return self.dropout(x)
-
-class ScaledDotProductAttention(nn.Module):
-    def __init__(self):
-        super(ScaledDotProductAttention, self).__init__()
-
-    def forward(self, query, key, value, q_mask, k_mask, scale=None):
-        '''
-        q: [B, L_q, D_q]
-        k: [B, L_k, D_k]
-        v: [B, L_v, D_v]
-        q_mask: [B, L_q]
-        k_mask: [B, L_k]
-        '''
-        batch, L_q, D_q = query.size()
-        _, L_k, D_k = key.size()
-
-        if scale is None:
-            scale = D_q
-
-        mask = q_mask.unsqueeze(2).matmul(k_mask.unsqueeze(1))
-        assert mask.size() == torch.Size((batch, L_q, L_k))
-
-        # [batch, L_q, L_k]
-        A = query.matmul(key.transpose(1, 2)) \
-                .div(np.sqrt(scale)) \
-                .masked_fill(mask == 0, float('-inf')) \
-                .exp()
-        A_sum = A.sum(dim=-1, keepdim=True).clamp(min=2e-15)
-        attn = A.div(A_sum)
-        assert attn.size() == torch.Size((batch, L_q, L_k))
-        return attn.matmul(value)
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, dim, nheads=8, dropout=0.1):
-        super(MultiHeadAttention, self).__init__()
-        self.dim_head = dim // nheads
-        self.nheads = nheads
-        self.linear_k = nn.Linear(dim, self.dim_head * nheads)
-        self.linear_v = nn.Linear(dim, self.dim_head * nheads)
-        self.linear_q = nn.Linear(dim, self.dim_head * nheads)
-
-        self.dot_product_attn = ScaledDotProductAttention()
-        self.linear_final = nn.Linear(dim, dim)
-        self.dropout = nn.Dropout(dropout)
-
-        self.layer_norm = nn.LayerNorm(dim)
-        self.apply(self.init_weights)
-
-    def init_weights(self, m):
-        if type(m) == nn.Linear:
-            torch.nn.init.xavier_normal_(m.weight)
-            m.bias.data.fill_(0)
-
-    def forward(self, query, key, value, q_mask, k_mask):
-        '''
-        key: [B, L_k, D_k]
-        value: [B, L_v, D_v]
-        query: [B, L_q, D_q]
-        q_mask: [B, L_q]
-        k_mask: [k_q]
-        '''
-        residual = query
-        batch = key.size(0)
-
-        key = self.linear_k(key)
-        value = self.linear_v(value)
-        query = self.linear_q(query)
-
-        key = key.view(batch * self.nheads, -1, self.dim_head)
-        value = value.view(batch * self.nheads, -1, self.dim_head)
-        query = query.view(batch * self.nheads, -1, self.dim_head)
-
-        q_mask = q_mask.repeat(self.nheads, 1)
-        k_mask = k_mask.repeat(self.nheads, 1)
-
-        context = self.dot_product_attn(query=query,
-                                        key=key,
-                                        value=value,
-                                        q_mask=q_mask,
-                                        k_mask=k_mask,
-                                        scale=self.dim_head)
-        context = context.view(batch, -1, self.nheads * self.dim_head)
-        
-        output = self.linear_final(context)
-        output = self.dropout(output)
-
-        output = self.layer_norm(residual + output)
-
-        return output
-
-class PositionalWiseFeedForward(nn.Module):
-    def __init__(self, dim=512, ffn_dim=2048, dropout=0.1):
-        super(PositionalWiseFeedForward, self).__init__()
-        self.w1 = nn.Conv1d(dim, ffn_dim, 1)
-        self.w2 = nn.Conv1d(dim, ffn_dim, 1)
-        self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(dim)
-
-    def forward(self, x):
-        '''
-        x: [B, S, D]
-        '''
-        output = x.transpose(1, 2)
-        output = self.w2(torch.relu(self.w1(output)))
-        output = self.dropout(output.transpose(1, 2))
-
-        return self.layer_norm(x + output)
-
-class Transformer(nn.Module):
-    def __init__(self, dim, nheads=8, dropout=0.1):
-        super(Transformer, self).__init__()
-        self.nheads = nheads
-        self.attention = MultiHeadAttention(dim=dim, nheads=nheads, dropout=dropout)
-        dim = (dim // nheads) * nheads
-        self.pos_fc = PositionalWiseFeedForward(dim=dim, dropout=dropout, ffn_dim=dim)
-    
-    #def init_weights(self):
-    #    initrange = 0.1
-    #    nn.init.uniform_(self.encoder.weight, -initrange, initrange)
-    #    for module in self.decoder.modules():
-    #        nn.init.zeros_(module.weight)
-    #        nn.init.uniform_(module.weight, -initrange, initrange)
-    #    if self.dueling:
-    #        nn.init.zeros_(self.value_layer.weight)
-    #        nn.init.uniform_(self.value_layer, -initrange, initrange)
-    
-    def forward(self, query, key, value, q_mask, k_mask):
-        '''
-        query: [B, L_q, D_q]
-        key: [B, L_k, D_k]
-        value: [B, L_v, D_v]
-        q_mask: [B, L_q]
-        k_mask: [B, L_k]
-        '''
-        B, L_q, dim = query.size()
-        L_k = key.size(1)
-
-        output = self.attention(
-            query=query,
-            key=key,
-            value=value,
-            q_mask=q_mask,
-            k_mask=k_mask
-        )
-        dim = (dim // self.nheads) * self.nheads
-        assert output.size() == torch.Size((B, L_q, dim))
-        output = self.pos_fc(output)
-        return output
-
 class QNetwork(nn.Module):
     def __init__(self,
                  num_labels,
@@ -263,17 +75,6 @@ class QNetwork(nn.Module):
                  #dueling=False):
         super(QNetwork, self).__init__()
         # Transformer
-        #self.pos_encoder = PositionalEncoding(hidden_size,
-        #                                      dropout=dropout,
-        #                                      max_len=6)
-        #encoder_layers = TransformerEncoderLayer(d_model=hidden_size,
-        #                                         nhead=nhead,
-        #                                         dropout=dropout)
-        #self.encoder = TransformerEncoder(encoder_layers,
-        #                                  num_layers=num_layers)
-        ## Value
-        #if dueling:
-        #    self.value_layer = nn.Linear(hidden_size, 1)
         self.nheads = nheads
         self.num_layers = num_layers
         for i in range(num_layers):
@@ -285,12 +86,7 @@ class QNetwork(nn.Module):
         self.transformer = Transformer(dim=hidden_size,
                                        nheads=nheads,
                                        dropout=dropout)
-        self.mlp = nn.Sequential(
-            nn.Linear(2 * hidden_size, hidden_size),
-            nn.ReLU(True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, num_labels),
-        )
+        self.mlp = ScoreLayer(hidden_size, num_labels, dropout)
 
     def forward(self, claims, evidences, evidences_mask):
         '''
@@ -306,7 +102,7 @@ class QNetwork(nn.Module):
         
         for i in range(self.num_layers):
             layer = getattr(self, 'encoder_%d' % i)
-            evidences = layer(
+            evidences, _ = layer(
                 query=evidences,
                 key=evidences,
                 value=evidences,
@@ -314,7 +110,7 @@ class QNetwork(nn.Module):
                 k_mask=evidences_mask
             )
         assert evidences.size() == torch.Size((batch, seq, hidden_size))
-        output = self.transformer(
+        output, _ = self.transformer(
             query = claims.unsqueeze(1),
             key=evidences,
             value=evidences,

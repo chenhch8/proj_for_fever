@@ -62,7 +62,7 @@ class BaseDQN:
             )
 
 
-    def update(self, transitions: List[Transition], isweights: List[float]=None, log=False) -> float:
+    def update(self, transitions: List[Transition], log=False) -> float:
         self.q_net.train()
         self.t_net.eval()
         
@@ -144,14 +144,13 @@ class BaseDQN:
             
             del pred_labels
             
-                #del labels, scores
         del labels
 
-	    # compute Huber loss
+        # compute Huber loss
         rl_loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
 				   reduction='none')
 
-	    # binary loss
+        # binary loss
         def contains_golden_evidence(golden_set, predict_evdience):
             if not len(golden_set): return True
             golden_id = [set([sent.id for sent in evi]) for evi in golden_set]
@@ -166,14 +165,8 @@ class BaseDQN:
         sl_loss = F.binary_cross_entropy_with_logits(scores, binary_labels, reduction='none')
         
         # total loss
-        if isweights != None:
-            isweights = torch.tensor(isweights, dtype=torch.float, device=self.device)
-            assert rl_loss.size() == isweights.size()
-            loss = (rl_loss * isweights).mean() + \
-                   (sl_loss * mask.view(-1, 1) * isweights.view(-1, 1)).sum() / max(1, 3 * mask.sum())
-        else:
-            loss = rl_loss.mean() + \
-                       (sl_loss * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())
+        loss = rl_loss.mean() + \
+                   (sl_loss * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())
         loss_vec = rl_loss + sl_loss.mean(dim=1) * mask
 
         # optimize model
@@ -190,7 +183,6 @@ class BaseDQN:
         return loss_vec.detach().cpu().data, \
                rl_loss.detach().mean().cpu().data, \
                ((sl_loss.detach() * mask.view(-1, 1)).sum() / max(1, 3 * mask.sum())).cpu().data, \
-               loss.detach().cpu().data
 
 
     @property
@@ -207,6 +199,7 @@ class BaseDQN:
                       net: nn.Module,
                       is_eval: bool=False,
                       ) -> Tuple[List[Action], List[float]]:
+                      #top_k: int=1) -> Tuple[List[Action], List[float]]:
         assert len(batch_state) == len(batch_actions)
         MAX_SIZE = 512 * 256
 

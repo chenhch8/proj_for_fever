@@ -10,7 +10,9 @@ from typing import List, Tuple
 from tqdm import tqdm, trange
 from time import sleep
 from functools import reduce
+from itertools import chain
 from collections import defaultdict
+from copy import deepcopy
 import pdb
 #from multiprocessing import cpu_count, Pool
 
@@ -25,7 +27,7 @@ from dqn.transformer_dqn import TransformerDQN, transformer_load_and_process_dat
 from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import *
-from data.dataset import collate_fn, FeverDataset
+from data.dataset import collate_fn, FeverDataset, ConcatDataset
 from config import set_com_args, set_dqn_args, set_bert_args
 from eval.calc_score import calc_fever_score, truncate_q_values, calc_test_result, calc_fever2_score
 
@@ -63,9 +65,57 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
+def generate_sequences(claim: Claim, label_id: int, evidence_set: EvidenceSet,
+                       sentences: List[Sentence], env: BaseEnv, label2id: dict) -> List[List[Transition]]:
+    state = State(claim=claim,
+                  label=label_id,
+                  pred_label=label_id,  # 初始化为真实label
+                  candidate=[],
+                  evidence_set=evidence_set,
+                  count=0)
+    if label_id == label2id['NOT ENOUGH INFO']:
+        assert len(evidence_set) == 0
+        evi_len = np.random.choice([1, 2, 3, 4, 5], 1, [0.82, 0.06, 0.05, 0.04, 0.03])[0]
+        evidence_set = [random.sample(sentences, min(len(sentences), evi_len))]
+    # T/F/N sequences
+    all_sequences = []
+    for evi in evidence_set:
+        if len(evi) > 5: continue
+        if len(evi) > 1:  # 随机打乱句子顺序
+            evi = deepcopy(evi)
+            random.shuffle(evi)
+        sequence = []
+        # actions: 仅限于证据包含的所有句子
+        actions = [Action(sentence=sent, label=label_id)for sent in evi]
+        actions_next = actions
+        for action in actions:
+            state_next, reward, _ = env.step(state, action)
+            actions_next = [action_next for action_next in actions_next \
+                                if action_next.sentence.id != action.sentence.id]
+            done = False
+            if len(actions_next) == 0:
+                assert action is actions[-1]
+                done = True
+            sequence.append(Transition(state=state,
+                                       action=action,
+                                       next_state=state_next,
+                                       reward=reward,
+                                       next_actions=actions_next,
+                                       done=done))
+            state = state_next
+        if len(sequence):
+            all_sequences.append(sequence)
+    return all_sequences
+
+
+def sequences2transitions(sequences: List[List[Transition]]) -> List[Transition]:
+    return list(chain.from_iterable(sequences))
+
+
 def train(args,
           agent,
-          train_data: FeverDataset,
+          train_dataset: FeverDataset,
+          raw_dataset: FeverDataset,
           epochs_trained: int=0,
           acc_loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0,
@@ -95,7 +145,7 @@ def train(args,
     else:
         memory = Memory[args.mem](args.capacity, args.num_labels, args.proportion)
     
-    data_loader = DataLoader(train_data,
+    data_loader = DataLoader(ConcatDataset(train_dataset, raw_dataset),
                              num_workers=1,
                              collate_fn=collate_fn,
                              batch_size=args.train_batch_size,
@@ -106,6 +156,7 @@ def train(args,
             epochs_trained -= 1
             sleep(0.1)
             continue
+        
         epoch_iterator = tqdm(data_loader,
                               desc='Loss',
                               disable=args.local_rank not in [-1, 0])
@@ -114,13 +165,22 @@ def train(args,
 
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
         t_losses, losses = losses_trained_in_current_epoch, []
-        
-        for step, (batch_state, batch_actions) in enumerate(epoch_iterator):
+
+        for step, (batch_train_data, batch_raw_data) in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
                 continue
-            
-            #pdb.set_trace()
+            batch_state_list, batch_actions_list = list(zip(*batch_train_data))
+            batch_state = list(chain.from_iterable(batch_state_list))
+            batch_actions = list(chain.from_iterable(batch_actions_list))
+            # 生产真实 transitions
+            sequences = []
+            for raw_data in batch_raw_data:
+                sequences += generate_sequences(*raw_data, env, args.label2id)
+            gt = sequences2transitions(sequences)
+            random.shuffle(gt)
+            gt = tuple(gt)
+            gt_i, gt_bz = 0, len(gt) // args.max_evi_size
             while True:
                 batch_selected_action, _ = agent.select_action(batch_state,
                                                                batch_actions,
@@ -159,19 +219,28 @@ def train(args,
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
                     if args.mem.find('priority') != -1:
-                        tree_idx, isweights, batch = memory.sample(args.train_batch_size)
+                        tree_idx, batch_rl = memory.sample(args.train_batch_size)
                     else:
-                        batch = memory.sample(args.train_batch_size)
-                        isweights = None
-                    weights, rl_loss, sl_loss, loss = \
-                            agent.update(batch, isweights,
-                                         log=step % log_per_steps == 0 or step == 5)
+                        batch_rl = memory.sample(args.train_batch_size)
+                    # 采样真实证据的transition
+                    batch_sl = gt[gt_i:gt_i + gt_bz]
+                    batch = batch_rl + batch_sl
+                    flag = [1] * len(batch_rl) + [0] * len(batch_sl)
+                    gt_i = (gt_i + gt_bz) % len(gt)
+                    # 打乱
+                    index = list(range(len(batch)))
+                    random.shuffle(index)
+                    batch = [batch[i] for i in index]
+                    flag = [flag[i] for i in index]
+                    # 优化
+                    loss, rl_loss, sl_loss = agent.update(batch, log=step % log_per_steps == 0 or step == 5)
                     if args.mem.find('priority') != -1:
-                        memory.batch_update_sumtree(tree_idx, weights.tolist())
-                    t_loss += loss
+                        errors = [e for i, e in enumerate(loss.tolist()) if flag[i]]
+                        memory.batch_update_sumtree(tree_idx, errors)
+                    t_loss += rl_loss + sl_loss
                     t_steps += 1
-                    losses.append(loss)
-                    epoch_iterator.set_description('%.4f(%.4f,%.4f)' % (loss, rl_loss, sl_loss))
+                    losses.append(rl_loss + sl_loss)
+                    epoch_iterator.set_description('%.4f(%.4f,%.4f)' % (rl_loss + sl_loss, rl_loss, sl_loss))
                     epoch_iterator.refresh()
                 
                 if len(batch_state) == 0: break
@@ -368,9 +437,14 @@ def run_dqn(args) -> None:
     agent = Agent(args)
     agent.to(args.device)
     if args.do_train:
-        train_data = load_and_process_data(args,
+        train_dataset = load_and_process_data(args,
                                            os.path.join(args.data_dir, 'train_v6.jsonl'),
-                                           agent.token)
+                                           agent.token,
+                                           is_raw=False)
+        raw_dataset = load_and_process_data(args,
+                                         os.path.join(args.data_dir, 'train_v6.jsonl'),
+                                         agent.token,
+                                         is_raw=True)
         epochs_trained = 0
         acc_loss_trained_in_current_epoch = 0
         steps_trained_in_current_epoch = 0
@@ -387,7 +461,8 @@ def run_dqn(args) -> None:
                 losses_trained_in_current_epoch = list(map(float, fr.readlines()))
         train(args,
               agent,
-              train_data,
+              train_dataset,
+              raw_dataset,
               epochs_trained,
               acc_loss_trained_in_current_epoch,
               steps_trained_in_current_epoch,
