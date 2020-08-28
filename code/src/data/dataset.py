@@ -35,13 +35,14 @@ class FeverDataset(Dataset):
             claim, label, evidence_set, sentences = self.data[index]
         if self.is_raw:
             return claim, label, evidence_set, sentences
-        state = State(claim=claim,
+        state = [State(claim=claim,
                       label=label,
                       evidence_set=evidence_set,
-                      pred_label=self.label2id['NOT ENOUGH INFO'],
+                      pred_label=idx,
                       candidate=[],
-                      count=0)
-        actions = [Action(sentence=sent, label='F/T/N') for sent in sentences]
+                      count=0
+        ) for idx in self.label2.values()]
+        actions = [[Action(sentence=sent, label='F/T/N') for sent in sentences] for _ in range(len(self.label2id))]
         return state, actions
 
     def __len__(self):

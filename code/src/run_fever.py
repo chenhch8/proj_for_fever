@@ -238,10 +238,10 @@ def train(args,
                         errors = [e for i, e in enumerate(loss.tolist()) if flag[i]]
                         memory.batch_update_sumtree(tree_idx, errors)
                     loss = loss.mean().item()
-                    t_loss += mloss
+                    t_loss += loss
                     t_steps += 1
-                    losses.append(mloss)
-                    epoch_iterator.set_description('%.4f(%.4f)' % (mloss, loss))
+                    losses.append(loss)
+                    epoch_iterator.set_description('%.4f' % loss)
                     epoch_iterator.refresh()
                 
                 if len(batch_state) == 0: break

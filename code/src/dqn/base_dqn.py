@@ -144,7 +144,7 @@ class BaseDQN:
             
             del pred_labels
             
-        #del labels, scores
+        del labels, scores
 
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
@@ -161,7 +161,7 @@ class BaseDQN:
         
         self.steps_done += 1
 
-        return loss.detach().cpu().data, mloss
+        return loss.detach().cpu().data
 
 
     @property
@@ -197,27 +197,15 @@ class BaseDQN:
         
         batch_selected_action, offset = [], 0
         for state, actions in zip(batch_state, batch_actions):
-            cur_q_values = q_values[offset:offset + len(actions)]
+            cur_q_values = q_values[offset:offset + len(actions), state.pred_label]
             if self.epsilon_greedy or is_eval:
-                TF = cur_q_values[:, [self.args.label2id['REFUTES'], self.args.label2id['SUPPORTS']]]
-                N = cur_q_values[:, [self.args.label2id['NOT ENOUGH INFO']]]
-                comp = TF < N
-                if torch.prod(comp):
-                    max_action = cur_q_values.argmax().item()
-                    sent_id = max_action // self.args.num_labels
-                    label_id = max_action % self.args.num_labels
-                else:
-                    indics = (~comp).sum(dim=1).nonzero().view(-1)
-                    max_action = cur_q_values[indics].argmax().item()
-                    sent_id = indics[max_action // self.args.num_labels].item()
-                    label_id = max_action % self.args.num_labels
+                sent_id = cur_q_values.argmax().item()
             else:
                 sent_id = random.randint(0, max(0, len(actions) - 1))
-                label_id = random.randint(0, self.args.num_labels - 1)
             
-            action = Action(sentence=actions[sent_id].sentence, label=label_id)
+            action = Action(sentence=actions[sent_id].sentence, label=state.pred_label)
 
-            q = cur_q_values[sent_id, label_id].item()
+            q = cur_q_values[sent_id].item()
             batch_selected_action.append((action, q))
             offset += len(actions)
         assert offset == q_values.size(0)
