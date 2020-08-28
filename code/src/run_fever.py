@@ -264,10 +264,9 @@ def train(args,
                     if args.mem.find('priority') != -1:
                         errors = [e for i, e in enumerate(loss.tolist()) if flag[i]]
                         memory.batch_update_sumtree(tree_idx, errors)
-                    loss = loss.mean().item()
-                    t_loss += loss
+                    t_loss += rl_loss + sl_loss
                     t_steps += 1
-                    losses.append(loss)
+                    losses.append(rl_loss + sl_loss)
                     epoch_iterator.set_description('%.4f(%.4f,%.4f)' % (rl_loss + sl_loss, rl_loss, sl_loss))
                     epoch_iterator.refresh()
                 
