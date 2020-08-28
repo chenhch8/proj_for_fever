@@ -20,6 +20,8 @@ class FeverDataset(Dataset):
             self.data = list(map(lambda f: os.path.join(file_name_or_path, f), names))
         else:
             self.data = self.load_data(file_name_or_path)
+        if is_raw:
+            random.shuffle(self.data)
 
     def load_data(self, filename: str):
         with open(filename, 'rb') as fr:
@@ -44,6 +46,16 @@ class FeverDataset(Dataset):
 
     def __len__(self):
         return len(self.data)
+
+class ConcatDataset(Dataset):
+    def __init__(self, *datasets):
+        self.datasets = datasets
+
+    def __getitem__(self, index):
+        return tuple(d[index] for d in self.datasets)
+    
+    def __len__(self):
+        return min(len(d) for d in self.datasets)
 
 def collate_fn(batch):
     data = []

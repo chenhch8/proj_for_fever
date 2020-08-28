@@ -149,10 +149,9 @@ class BaseDQN:
         # compute Huber loss
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
                                 reduction='none')
-        mloss = loss.mean()
         
         # optimize model
-        mloss.backward()
+        loss.mean().backward()
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),
                                        self.args.max_grad_norm)
         self.optimizer.step()
@@ -162,7 +161,7 @@ class BaseDQN:
         
         self.steps_done += 1
 
-        return loss.detach().cpu().data, mloss.detach().cpu().data
+        return loss.detach().cpu().data
 
 
     @property
