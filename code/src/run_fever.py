@@ -12,6 +12,7 @@ from time import sleep
 from functools import reduce
 from itertools import chain
 from collections import defaultdict
+from copy import deepcopy
 import pdb
 #from multiprocessing import cpu_count, Pool
 
@@ -26,7 +27,7 @@ from dqn.transformer_dqn import TransformerDQN, transformer_load_and_process_dat
 from environment import BaseEnv, ChenEnv
 from replay_memory import ReplayMemory, PrioritizedReplayMemory, ReplayMemoryWithLabel, PrioritizedReplayMemoryWithLabel
 from data.structure import *
-from data.dataset import collate_fn, FeverDataset
+from data.dataset import collate_fn, FeverDataset, COncatDataset
 from config import set_com_args, set_dqn_args, set_bert_args
 from eval.calc_score import calc_fever_score, truncate_q_values, calc_test_result, calc_fever2_score
 
@@ -64,15 +65,15 @@ def set_random_seeds(random_seed):
         torch.cuda.manual_seed(random_seed)
 
 
-def generate_sequences(claim: Claim, label: str, evidence_set: EvidenceSet,
+def generate_sequences(claim: Claim, label_id: int, evidence_set: EvidenceSet,
                        sentences: List[Sentence], env: BaseEnv, label2id: dict) -> List[List[Transition]]:
     state = State(claim=claim,
-                  label=label2id[label],
+                  label=label_id,
                   pred_label=label2id['NOT ENOUGH INFO'],
                   candidate=[],
                   evidence_set=evidence_set,
                   count=0)
-    if label == 'NOT ENOUGH INFO':
+    if label == label2id['NOT ENOUGH INFO']:
         assert len(evidence_set) == 0
         evi_len = np.random.choise([1, 2, 3, 4, 5], 1, [0.82, 0.06, 0.05, 0.04, 0.03])[0]
         evidence_set = [random.sample(sentences, min(len(sentences), evi_len))]
@@ -81,7 +82,7 @@ def generate_sequences(claim: Claim, label: str, evidence_set: EvidenceSet,
     for evi in evidence_set:
         if len(evi) > 5: continue
         if len(evi) > 1:  # 随机打乱句子顺序
-            evi = evi[:]
+            evi = deepcopy(evi)
             random.shuffle(evi)
         sequence = []
         # actions: 仅限于证据包含的所有句子
@@ -113,8 +114,8 @@ def sequences2transitions(sequences: List[List[Transition]]) -> List[Transition]
 
 def train(args,
           agent,
-          train_data: FeverDataset,
-          raw_data: FeverDataset,
+          train_dataset: FeverDataset,
+          raw_dataset: FeverDataset,
           epochs_trained: int=0,
           acc_loss_trained_in_current_epoch: float=0,
           steps_trained_in_current_epoch: int=0,
@@ -144,35 +145,17 @@ def train(args,
     else:
         memory = Memory[args.mem](args.capacity, args.num_labels, args.proportion)
     
-    data_loader = DataLoader(train_data,
+    data_loader = DataLoader(COncatDataset(train_dataset, raw_dataset),
                              num_workers=1,
                              collate_fn=collate_fn,
                              batch_size=args.train_batch_size,
                              shuffle=True)
-    raw_loader = DataLoader(raw_data,
-                            num_workers=1,
-                            collate_fn=collate_fn,
-                            batch_size=args.train_batch_size,
-                            shuffle=False)
     train_iterator = trange(int(args.num_train_epochs), desc='Epoch', disable=args.local_rank not in [-1, 0])
     for epoch in train_iterator:
         if epochs_trained > 0:
             epochs_trained -= 1
             sleep(0.1)
             continue
-        # 获取真实证据transitions
-        sequences = []
-        for batch_claim, batch_label, batch_evi_set, \
-                batch_sentences in tqdm(raw_loader,
-                                        desc='generating ground transitions',
-                                        disable=args.local_rank not in [-1, 0]):
-            batch_iter = zip(batch_claim, batch_label, batch_evi_set, batch_sentences)
-            sequences += [generate_sequences(claim, label, evi_set, sentences, env, args.label2id) \
-                          for claim, label, evi_set, sentences in batch_iter]
-        ground_transitions = sequences2transitions(ground_transitions)
-        random.shuffle(ground_transitions)
-        ground_sample_size = len(train_data) // (args.max_evi_size * args.train_batch_size)
-        ptr_ground = 0
         
         epoch_iterator = tqdm(data_loader,
                               desc='Loss',
@@ -183,11 +166,19 @@ def train(args,
         t_loss, t_steps = acc_loss_trained_in_current_epoch, steps_trained_in_current_epoch
         t_losses, losses = losses_trained_in_current_epoch, []
 
-        for step, (batch_state, batch_actions) in enumerate(epoch_iterator):
+        for step, (batch_train_data, batch_raw_data) in enumerate(epoch_iterator):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
                 continue
-            
+            batch_state, batch_actions = list(zip(*batch_train_data))
+            # 生产真实 transitions
+            sequences = []
+            for raw_data in batch_raw_data:
+                sequences += generate_sequences(*raw_data, env, args.label2id)
+            gt = sequences2transitions(sequences)
+            random.shuffle(gt)
+            gt = tuple(gt)
+            gt_i, gt_bz = 0, len(gt) // args.max_evi_size
             while True:
                 batch_selected_action, _ = agent.select_action(batch_state,
                                                                batch_actions,
@@ -230,12 +221,12 @@ def train(args,
                     else:
                         batch_rl = memory.sample(args.train_batch_size)
                     # 采样真实证据的transition
-                    batch_sl = ground_transitions[ptr_ground:ptr_ground + ground_sample_size]
+                    batch_sl = gt[gt_i:gt_i + gt_bz]
                     batch = batch_rl + batch_sl
                     flag = [1] * len(batch_rl) + [0] * len(batch_sl)
-                    ptr_ground = (ptr_ground + ground_sample_size) % len(ground_transitions)
+                    gt_i = (gt_i + gt_bz) % len(gt)
                     # 打乱
-                    index = list(range(batch))
+                    index = list(range(len(batch)))
                     random.shuffle(index)
                     batch = [batch[i] for i in index]
                     flag = [flag[i] for i in index]
@@ -445,11 +436,11 @@ def run_dqn(args) -> None:
     agent = Agent(args)
     agent.to(args.device)
     if args.do_train:
-        train_data = load_and_process_data(args,
+        train_dataset = load_and_process_data(args,
                                            os.path.join(args.data_dir, 'train_v6.jsonl'),
                                            agent.token,
                                            is_raw=False)
-        raw_data = load_and_process_data(args,
+        raw_dataset = load_and_process_data(args,
                                          os.path.join(args.data_dir, 'train_v6.jsonl'),
                                          agent.token,
                                          is_raw=True)
@@ -469,8 +460,8 @@ def run_dqn(args) -> None:
                 losses_trained_in_current_epoch = list(map(float, fr.readlines()))
         train(args,
               agent,
-              train_data,
-              raw_data,
+              train_dataset,
+              raw_dataset,
               epochs_trained,
               acc_loss_trained_in_current_epoch,
               steps_trained_in_current_epoch,

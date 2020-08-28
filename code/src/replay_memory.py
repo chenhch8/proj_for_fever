@@ -18,6 +18,7 @@ class ReplayMemory:
     def reset(self) -> None:
         self.position = 0
         self.length = 0
+        self.sequences = {}
 
     def push(self, item: Transition) -> None:
         self.memory[self.position] = item
@@ -37,7 +38,6 @@ class PrioritizedReplayMemory(ReplayMemory):
     epsilon: float = 0.01 # small amount to avoid zero priority
     alpha: float = 0.6 # [0~1] convert the importance of TD error to priority
     beta: float = 0.4 # importance-sampling, from initial value increasing to 1
-    beta_increment_per_sampling = 0.001
     abs_err_upper = 1.  # clipped abs error
     
     def __init__(self, capacity: int) -> None:
@@ -64,8 +64,6 @@ class PrioritizedReplayMemory(ReplayMemory):
     def sample(self, batch_size: int) -> Tuple[List[int], List[Transition]]:
         idxs, batch = [], []
         segment = self.tree[0] / batch_size
-        
-        self.beta = min(1., self.beta + self.beta_increment_per_sampling)
         
         for i in range(batch_size):
             a = segment * i
@@ -149,16 +147,15 @@ class PrioritizedReplayMemoryWithLabel(ReplayMemoryWithLabel):
         sizes[1] = batch_size - sizes[0] - sizes[2]
         assert sum(sizes) == batch_size
         
-        idxs, isweights, batch = [], [], []
+        idxs, batch = [], []
         for label, (replay_memory, size) in enumerate(zip(self.replay_memories, sizes)):
-            _idxs, _isweights, _batch = replay_memory.sample(size)
+            _idxs, _batch = replay_memory.sample(size)
             idxs += list(zip([label] * len(_idxs), _idxs))
-            isweights += _isweights
             batch += _batch
-        data = list(zip(idxs, isweights, batch))
+        data = list(zip(idxs, batch))
         random.shuffle(data)
-        
-        return tuple(zip(*data))
+
+        return list(zip(*data))
     
     def batch_update_sumtree(self, batch_idx: List[Tuple[int, int]], batch_value: List[float], is_error: bool=True) -> None:
         for (label, idx), value in zip(batch_idx, batch_value):
