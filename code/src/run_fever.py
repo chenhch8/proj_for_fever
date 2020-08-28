@@ -69,7 +69,7 @@ def generate_sequences(claim: Claim, label_id: int, evidence_set: EvidenceSet,
                        sentences: List[Sentence], env: BaseEnv, label2id: dict) -> List[List[Transition]]:
     state = State(claim=claim,
                   label=label_id,
-                  pred_label=label2id['NOT ENOUGH INFO'],
+                  pred_label=label_id,  # 初始化为真实label
                   candidate=[],
                   evidence_set=evidence_set,
                   count=0)
@@ -170,7 +170,9 @@ def train(args,
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
                 continue
-            batch_state, batch_actions = list(zip(*batch_train_data))
+            batch_state_list, batch_actions_list = list(zip(*batch_train_data))
+            batch_state = list(chain.from_iterable(batch_states_list))
+            batch_actions = list(chain.from_iterable(batch_actions_list))
             # 生产真实 transitions
             sequences = []
             for raw_data in batch_raw_data:
@@ -236,10 +238,10 @@ def train(args,
                         errors = [e for i, e in enumerate(loss.tolist()) if flag[i]]
                         memory.batch_update_sumtree(tree_idx, errors)
                     loss = loss.mean().item()
-                    t_loss += loss
+                    t_loss += mloss
                     t_steps += 1
-                    losses.append(loss)
-                    epoch_iterator.set_description('%.8f' % loss)
+                    losses.append(mloss)
+                    epoch_iterator.set_description('%.4f(%.4f)' % (mloss, loss))
                     epoch_iterator.refresh()
                 
                 if len(batch_state) == 0: break

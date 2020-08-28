@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import List, Tuple
 from data.structure import Transition
 
+import pdb
 
 class ReplayMemory:
     def __init__(self, capacity: int) -> None:

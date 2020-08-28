@@ -161,7 +161,7 @@ class BaseDQN:
         
         self.steps_done += 1
 
-        return loss.detach().cpu().data
+        return loss.detach().cpu().data, mloss
 
 
     @property
