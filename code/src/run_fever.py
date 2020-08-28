@@ -12,6 +12,7 @@ from time import sleep
 from functools import reduce
 from itertools import chain
 from collections import defaultdict
+from copy import deepcopy
 import pdb
 #from multiprocessing import cpu_count, Pool
 #from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
@@ -82,7 +83,7 @@ def generate_sequences(claim: Claim, label_id: str, evidence_set: EvidenceSet,
     for evi in evidence_set:
         if len(evi) > 5: continue
         if len(evi) > 1:  # 随机打乱句子顺序
-            evi = evi[:]
+            evi = deepcopy(evi)
             random.shuffle(evi)
         sequence = []
         # actions: 仅限于证据包含的所有句子
