@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 # coding: utf-8
 import random
+import math
 import numpy as np
+from collections import defaultdict
 from typing import List, Tuple
 from data.structure import Transition
 import pdb
@@ -12,10 +14,11 @@ class ReplayMemory:
         self.memory = [None] * capacity
         self.position = 0
         self.length = 0
-
+    
     def reset(self) -> None:
         self.position = 0
         self.length = 0
+        self.sequences = {}
 
     def push(self, item: Transition) -> None:
         self.memory[self.position] = item
@@ -23,8 +26,9 @@ class ReplayMemory:
         self.length = min(self.length + 1, self.capacity)
 
     def sample(self, batch_size: int) -> List[Transition]:
-        return random.sample(self.memory[:self.length],
-                             min(self.length, batch_size))
+        batch += random.sample(self.memory[:self.length],
+                               min(batch_size, self.length))
+        return batch
 
     def __len__(self) -> int:
         return self.length
@@ -34,7 +38,6 @@ class PrioritizedReplayMemory(ReplayMemory):
     epsilon: float = 0.01 # small amount to avoid zero priority
     alpha: float = 0.6 # [0~1] convert the importance of TD error to priority
     beta: float = 0.4 # importance-sampling, from initial value increasing to 1
-    beta_increment_per_sampling = 0.001
     abs_err_upper = 1.  # clipped abs error
     
     def __init__(self, capacity: int) -> None:
@@ -59,11 +62,9 @@ class PrioritizedReplayMemory(ReplayMemory):
             priority = self.abs_err_upper
         self.update_sumtree(idx, priority, is_error=False)
 
-    def sample(self, batch_size: int) -> Tuple[List[int], List[float], List[Transition]]:
-        idxs, isweights, batch = [], [], []
+    def sample(self, batch_size: int) -> Tuple[List[int], List[Transition]]:
+        idxs, batch = [], []
         segment = self.tree[0] / batch_size
-        
-        self.beta = min(1., self.beta + self.beta_increment_per_sampling)
         
         for i in range(batch_size):
             a = segment * i
@@ -71,17 +72,10 @@ class PrioritizedReplayMemory(ReplayMemory):
 
             s = random.uniform(a, b)
             idx, priority = self.get_from_sumtree(s)
-            isweights.append(priority / self.tree[0])
             batch.append(self.memory[idx + 1 - self.capacity])
             idxs.append(idx)
 
-        #isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-        #                     -self.beta).tolist()
-        isweights = np.power(np.asarray(isweights) / max(min(isweights), self._get_priority(0.)),
-                             -self.beta).tolist()
-        #isweights = (isweights / isweights.max()).tolist()
-
-        return idxs, isweights, batch
+        return idxs, batch
 
     def update_sumtree(self, idx: int, value: float, is_error: bool=True) -> None:
         priority = self._get_priority(value) if is_error else value
@@ -95,6 +89,7 @@ class PrioritizedReplayMemory(ReplayMemory):
 
     def batch_update_sumtree(self, batch_idx: List[int], batch_value: List[float], is_error: bool=True) -> None:
         for idx, value in zip(batch_idx, batch_value):
+            if idx == -1: continue
             self.update_sumtree(idx, value, is_error)
 
     def get_from_sumtree(self, x: float) -> Tuple[int, float]:
@@ -153,16 +148,15 @@ class PrioritizedReplayMemoryWithLabel(ReplayMemoryWithLabel):
         sizes[1] = batch_size - sizes[0] - sizes[2]
         assert sum(sizes) == batch_size
         
-        idxs, isweights, batch = [], [], []
+        idxs, batch = [], []
         for label, (replay_memory, size) in enumerate(zip(self.replay_memories, sizes)):
-            _idxs, _isweights, _batch = replay_memory.sample(size)
+            _idxs, _batch = replay_memory.sample(size)
             idxs += list(zip([label] * len(_idxs), _idxs))
-            isweights += _isweights
             batch += _batch
-        data = list(zip(idxs, isweights, batch))
+        data = list(zip(idxs, batch))
         random.shuffle(data)
-        
-        return tuple(zip(*data))
+
+        return list(zip(*data))
     
     def batch_update_sumtree(self, batch_idx: List[Tuple[int, int]], batch_value: List[float], is_error: bool=True) -> None:
         for (label, idx), value in zip(batch_idx, batch_value):
