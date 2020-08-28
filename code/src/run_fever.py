@@ -73,7 +73,7 @@ def generate_sequences(claim: Claim, label_id: int, evidence_set: EvidenceSet,
                   candidate=[],
                   evidence_set=evidence_set,
                   count=0)
-    if label == label2id['NOT ENOUGH INFO']:
+    if label_id == label2id['NOT ENOUGH INFO']:
         assert len(evidence_set) == 0
         evi_len = np.random.choise([1, 2, 3, 4, 5], 1, [0.82, 0.06, 0.05, 0.04, 0.03])[0]
         evidence_set = [random.sample(sentences, min(len(sentences), evi_len))]
@@ -86,7 +86,7 @@ def generate_sequences(claim: Claim, label_id: int, evidence_set: EvidenceSet,
             random.shuffle(evi)
         sequence = []
         # actions: 仅限于证据包含的所有句子
-        actions = [Action(sentence=sent, label=label2id[label]) for sent in evi]
+        actions = [Action(sentence=sent, label=label_id)for sent in evi]
         actions_next = actions
         for action in actions:
             state_next, reward, _ = env.step(state, action)
