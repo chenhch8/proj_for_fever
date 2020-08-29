@@ -296,7 +296,8 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
             filename = 'fever2-dev_v6.jsonl'
         dev_data = load_and_process_data(args,
                                          os.path.join(args.data_dir, filename),
-                                         agent.token)
+                                         agent.token,
+                                         is_raw=False)
     data_loader = DataLoader(dev_data, collate_fn=collate_fn, batch_size=1, shuffle=False)
     epoch_iterator = tqdm(data_loader,
                           disable=args.local_rank not in [-1, 0])
@@ -304,7 +305,9 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
-        for batch_state, batch_actions in epoch_iterator:
+        for batch_state_list, batch_actions_list in epoch_iterator:
+            batch_state = list(chain.from_iterable(batch_state_list))
+            batch_actions = list(chain.from_iterable(batch_actions_list))
             q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
                 batch_selected_action, batch_q_value = \
