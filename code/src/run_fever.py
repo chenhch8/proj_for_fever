@@ -330,7 +330,6 @@ def evaluate(args: dict, agent, save_dir: str, dev_data: FeverDataset=None, is_e
     results = []
     logger.info('Evaluating')
     with torch.no_grad():
-        pdb.set_trace()
         for batch_state, batch_actions in epoch_iterator:
             q_value_seq, state_seq = [], []
             for _ in range(args.max_evi_size):
