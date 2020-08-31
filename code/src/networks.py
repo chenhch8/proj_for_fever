@@ -2,7 +2,22 @@
 # coding=utf-8
 import torch
 from torch import nn
+from torch.nn import init
 import numpy as np
+
+
+def init_weights(net):
+    '''Init net parameters.'''
+    for m in net.modules():
+        if isinstance(m, nn.Conv2d):
+            init.xavier_uniform_(m.weight.data)
+            init.constant_(m.bias.data,0.1)
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
+        elif isinstance(m, nn.Linear):
+            m.weight.data.normal_(0,0.01)
+            m.bias.data.zero_()
 
 class AttentionLayer(nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -12,6 +27,7 @@ class AttentionLayer(nn.Module):
             nn.ReLU(True),
             nn.Linear(hidden_size, 1),
         )
+        self.apply(init_weights)
 
     def forward(self, query, key, value, q_mask, k_mask):
         '''
@@ -54,14 +70,7 @@ class ScoreLayer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_size, num_labels),
         )
-        self.apply(self.init_weights)
-
-    def init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.kaiming_uniform_(m.weight, a=np.sqrt(5))
-            feature_in = m.weight.size(1)
-            bound = 1 / np.sqrt(feature_in)
-            nn.init.uniform_(m.bias, -bound, bound)
+        self.apply(init_weights)
 
     def forward(self, x):
         '''
@@ -117,16 +126,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         self.layer_norm = nn.LayerNorm(dim)
-        self.apply(self.init_weights)
-
-    def init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.kaiming_uniform_(m.weight, a=np.sqrt(5))
-            feature_in = m.weight.size(1)
-            bound = 1 / np.sqrt(feature_in)
-            nn.init.uniform_(m.bias, -bound, bound)
-            #nn.init.xavier_normal_(m.weight)
-            #m.bias.data.fill_(0)
+        self.apply(init_weights)
 
     def forward(self, query, key, value, q_mask, k_mask):
         '''
@@ -172,6 +172,7 @@ class PositionalWiseFeedForward(nn.Module):
         self.w2 = nn.Conv1d(dim, ffn_dim, 1)
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(dim)
+        self.apply(init_weights)
 
     def forward(self, x):
         '''
