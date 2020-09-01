@@ -62,7 +62,7 @@ class BaseDQN:
             )
 
 
-    def update(self, transitions: List[Transition], log=False) -> float:
+    def update(self, transitions: List[Transition], isweights: List[float]=None, log: bool=False) -> float:
         self.q_net.train()
         self.t_net.eval()
         
@@ -150,6 +150,11 @@ class BaseDQN:
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
                                 reduction='none')
         
+        if isweights != None:
+            isweights = torch.tensor(isweights, dtype=torch.float32, device=self.device)
+            assert loss.size() == isweights.size()
+            loss = loss * isweights
+
         # optimize model
         loss.mean().backward()
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(),

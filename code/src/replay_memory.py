@@ -39,7 +39,8 @@ class PrioritizedReplayMemory(ReplayMemory):
     epsilon: float = 0.01 # small amount to avoid zero priority
     alpha: float = 0.6 # [0~1] convert the importance of TD error to priority
     beta: float = 0.4 # importance-sampling, from initial value increasing to 1
-    abs_err_upper = 1.  # clipped abs error
+    abs_err_upper: float = 1.  # clipped abs error
+    beta_increment_per_sampling: float = 0.001
     
     def __init__(self, capacity: int) -> None:
         super(PrioritizedReplayMemory, self).__init__(capacity)
@@ -62,10 +63,16 @@ class PrioritizedReplayMemory(ReplayMemory):
             priority = self.abs_err_upper
         self.update_sumtree(idx, priority, is_error=False)
 
-    def sample(self, batch_size: int) -> Tuple[List[int], List[Transition]]:
-        idxs, batch = [], []
+    def sample(self, batch_size: int) -> Tuple[List[int], List[float], List[Transition]]:
+        #idxs, batch = [], []
+        idxs, batch, isweights = [], [], []
         segment = self.tree[0] / batch_size
+        self.beta = np.min([1, self.beta + self.beta_increment_per_sampling])  # max=1
         
+        min_prob = np.min(self.tree[-self.capacity:]) / self.tree[0]     # for later calculate ISweight
+        if min_prob == 0:
+            min_prob = 0.00001
+
         for i in range(batch_size):
             a = segment * i
             b = segment * (i + 1)
@@ -75,7 +82,10 @@ class PrioritizedReplayMemory(ReplayMemory):
             batch.append(self.memory[idx + 1 - self.capacity])
             idxs.append(idx)
 
-        return idxs, batch
+            prob = priority / self.tree[0]
+            isweights.append(np.power(prob / min_prob, -self.beta))
+
+        return idxs, isweights, batch
 
     def update_sumtree(self, idx: int, value: float, is_error: bool=True) -> None:
         priority = self._get_priority(value) if is_error else value
@@ -105,7 +115,7 @@ class PrioritizedReplayMemory(ReplayMemory):
         return cur, self.tree[cur]
 
     def _get_priority(self, error):
-        return min(abs(error) + self.epsilon, self.abs_err_upper) ** self.alpha
+        return min(error + self.epsilon, self.abs_err_upper) ** self.alpha
 
 
 class ReplayMemoryWithLabel:
@@ -148,12 +158,13 @@ class PrioritizedReplayMemoryWithLabel(ReplayMemoryWithLabel):
         sizes[1] = batch_size - sizes[0] - sizes[2]
         assert sum(sizes) == batch_size
         
-        idxs, batch = [], []
+        idxs, isweights, batch = [], [], []
         for label, (replay_memory, size) in enumerate(zip(self.replay_memories, sizes)):
-            _idxs, _batch = replay_memory.sample(size)
+            _idxs, _isweights, _batch = replay_memory.sample(size)
             idxs += list(zip([label] * len(_idxs), _idxs))
             batch += _batch
-        data = list(zip(idxs, batch))
+            isweights += _isweights
+        data = list(zip(idxs, isweights, batch))
         random.shuffle(data)
 
         return list(zip(*data))
