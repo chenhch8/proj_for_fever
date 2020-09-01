@@ -157,7 +157,7 @@ def train(args,
     #                        batch_size=args.train_batch_size,
     #                        shuffle=False)
     data_loader = DataLoader(ConcatDataset(train_dataset, raw_dataset),
-                             num_workers=1,
+                             num_workers=0,
                              collate_fn=collate_fn,
                              batch_size=args.train_batch_size,
                              shuffle=True)
@@ -245,22 +245,25 @@ def train(args,
                 # sample batch data and optimize model
                 if len(memory) >= args.train_batch_size:
                     if args.mem.find('priority') != -1:
-                        tree_idx, batch_rl = memory.sample(args.train_batch_size)
+                        tree_idx, isweights, batch_rl = memory.sample(args.train_batch_size)
                     else:
                         batch_rl = memory.sample(args.train_batch_size)
+                        isweights = None
                     # 采样真实证据的transition
                     batch_sl = gt[gt_i:gt_i + gt_bz]
                     batch = batch_rl + batch_sl
                     flag = [1] * len(batch_rl) + [0] * len(batch_sl)
+                    isweights = isweights + (1,) * len(batch_sl)
                     gt_i = (gt_i + gt_bz) % len(gt)
                     # 打乱
                     index = list(range(len(batch)))
                     random.shuffle(index)
                     batch = [batch[i] for i in index]
                     flag = [flag[i] for i in index]
+                    isweights = [isweights[i] for i in index]
                     # 优化
                     loss, rl_loss, sl_loss = \
-                            agent.update(batch, log=step % log_per_steps == 0 or step == 5)
+                            agent.update(batch, isweights, log=step % log_per_steps == 0 or step == 5)
                     if args.mem.find('priority') != -1:
                         errors = [e for i, e in enumerate(loss.tolist()) if flag[i]]
                         memory.batch_update_sumtree(tree_idx, errors)
