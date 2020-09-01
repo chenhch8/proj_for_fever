@@ -62,7 +62,7 @@ class BaseDQN:
             )
 
 
-    def update(self, transitions: List[Transition], log=False) -> float:
+    def update(self, transitions: List[Transition], isweights: List[float]=None, log: bool=False) -> float:
         self.q_net.train()
         self.t_net.eval()
         
@@ -149,6 +149,10 @@ class BaseDQN:
         # compute Huber loss
         rl_loss = F.smooth_l1_loss(state_action_values, expected_state_action_values,
 				   reduction='none')
+        if isweights is not None:
+            isweights = torch.tensor(isweights, dtype=torch.float32, device=self.device)
+            assert rl_loss.size() == isweights.size()
+            rl_loss = rl_loss * isweights
 
         # binary loss
         def contains_golden_evidence(golden_set, predict_evdience):
@@ -163,6 +167,8 @@ class BaseDQN:
         binary_labels[[torch.arange(labels.size(0)).to(labels), labels]] = 1
         
         sl_loss = F.binary_cross_entropy_with_logits(scores, binary_labels, reduction='none')
+        if isweights is not None:
+            sl_loss = sl_loss * isweights.view(-1, 1)
         
         # total loss
         loss = rl_loss.mean() + \
